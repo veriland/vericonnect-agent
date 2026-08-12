@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd unit for the VeriConnect agent (macOS).
+
+  Install (system-wide, runs as root at boot):
+    sudo cp vc-agent /usr/local/bin/vc-agent
+    sudo mkdir -p /usr/local/etc/vericonnect
+    sudo cp Settings.ini /usr/local/etc/vericonnect/Settings.ini
+    sudo cp libvc-adapter-filesystem.dylib /usr/local/lib/vericonnect/
+    sudo cp com.veriland.vericonnect.plist /Library/LaunchDaemons/
+    sudo launchctl load -w /Library/LaunchDaemons/com.veriland.vericonnect.plist
+
+  Stop / uninstall:
+    sudo launchctl unload -w /Library/LaunchDaemons/com.veriland.vericonnect.plist
+
+  Point [Adapters] Directory in Settings.ini at /usr/local/lib/vericonnect
+  so the agent finds the adapter .dylib files.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.veriland.vericonnect</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/vc-agent</string>
+        <string>--settings</string>
+        <string>/usr/local/etc/vericonnect/Settings.ini</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/etc/vericonnect</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- restart the agent if it exits, like a resilient service should -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/vericonnect.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/vericonnect.err.log</string>
+</dict>
+</plist>

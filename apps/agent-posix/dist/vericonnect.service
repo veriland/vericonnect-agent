@@ -1,0 +1,38 @@
+# systemd unit for the VeriConnect agent (Linux).
+#
+# Install (system-wide, runs at boot):
+#   sudo cp vc-agent /usr/local/bin/vc-agent
+#   sudo mkdir -p /etc/vericonnect /usr/local/lib/vericonnect
+#   sudo cp Settings.ini /etc/vericonnect/Settings.ini
+#   sudo cp libvc-adapter-filesystem.so /usr/local/lib/vericonnect/
+#   sudo cp vericonnect.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vericonnect
+#
+# Status / logs / stop:
+#   systemctl status vericonnect
+#   journalctl -u vericonnect -f
+#   sudo systemctl stop vericonnect
+#
+# Point [Adapters] Directory in Settings.ini at /usr/local/lib/vericonnect
+# so the agent finds the adapter .so files.
+
+[Unit]
+Description=VeriConnect Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vc-agent --settings /etc/vericonnect/Settings.ini
+WorkingDirectory=/etc/vericonnect
+Restart=always
+RestartSec=10
+
+# Run as a dedicated unprivileged user (create it first, or change to your own):
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin vericonnect
+User=vericonnect
+Group=vericonnect
+
+[Install]
+WantedBy=multi-user.target

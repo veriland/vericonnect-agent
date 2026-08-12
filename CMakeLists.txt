@@ -65,7 +65,9 @@ add_subdirectory(apps/testapp)
 add_subdirectory(apps/selftest)
 
 if(WIN32)
-    add_subdirectory(apps/agent-win)
+    add_subdirectory(apps/agent-win)      # Windows service host
+else()
+    add_subdirectory(apps/agent-posix)    # Linux (systemd) / macOS (launchd) host
 endif()
 
 # Copy sample settings next to the binaries for convenience.

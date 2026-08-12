@@ -26,6 +26,7 @@ adapters/
                       CreateFile, ReadFile, DeleteFile, MoveFile
 apps/
   agent-win/          vc-agent.exe   - Windows service host (SCM glue only)
+  agent-posix/        vc-agent       - Linux/macOS host (systemd/launchd glue)
   testapp/            vc-test.exe    - verbose console tester (listen + send)
   selftest/           vc-selftest.exe- unit checks (RFC vectors, round trips)
 config/
@@ -33,10 +34,11 @@ config/
 ```
 
 **Portability rule:** everything in `core/` compiles anywhere; only
-`platform/` differs per OS. A Linux or macOS port needs a daemon `main`
-(systemd/launchd) that calls `vc_agent_run()` — the same function the
-Windows service and the test app use. The `platform/posix/` layer is
-already written (OpenSSL based) but not yet CI-tested.
+`platform/` differs per OS. The Windows service (`apps/agent-win`), the
+Linux/macOS host (`apps/agent-posix`) and the console test app all call
+the same `vc_agent_run()`; only process hosting differs. The
+`platform/posix/` layer is OpenSSL based (see the macOS build notes
+below) and not yet CI-tested.
 
 ## Building (Windows)
 
@@ -50,8 +52,24 @@ cmake --build build --config Release
 Binaries land in `build/bin/Release/`. Run `vc-selftest.exe` to verify
 the build.
 
-Building on Linux/macOS (once a distro with OpenSSL dev headers is at
-hand): `cmake -S . -B build && cmake --build build`.
+**Building on Linux/macOS** (needs OpenSSL dev headers):
+
+```
+cmake -S . -B build && cmake --build build
+```
+
+On macOS install OpenSSL first and point CMake at it (Homebrew keeps it
+off the default path):
+
+```
+brew install openssl@3
+cmake -S . -B build -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+cmake --build build
+```
+
+This produces `vc-agent`, `vc-test` and `vc-selftest` in `build/bin/`.
+To run `vc-agent` as a managed service, see the sample systemd and
+launchd units in `apps/agent-posix/dist/`.
 
 ## Configuration
 
