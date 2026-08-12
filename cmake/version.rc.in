@@ -1,0 +1,35 @@
+/* Generated from version.rc.in by CMake - do not edit the generated copy. */
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    @VC_VER_MAJOR@,@VC_VER_MINOR@,@VC_VER_PATCH@,@VC_VER_BUILD@
+ PRODUCTVERSION @VC_VER_MAJOR@,@VC_VER_MINOR@,@VC_VER_PATCH@,@VC_VER_BUILD@
+ FILEFLAGSMASK  0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS   0x40004L        /* VOS_NT_WINDOWS32 */
+ FILETYPE @VC_FILETYPE@
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080904b0"   /* UK English, Unicode */
+        BEGIN
+            VALUE "CompanyName",      "@VC_COMPANY@"
+            VALUE "FileDescription",  "@VC_FILE_DESC@"
+            VALUE "FileVersion",      "@VC_VER_STR@"
+            VALUE "InternalName",     "@VC_INTERNAL_NAME@"
+            VALUE "LegalCopyright",   "@VC_COPYRIGHT@"
+            VALUE "OriginalFilename", "@VC_ORIG_NAME@"
+            VALUE "ProductName",      "@VC_PRODUCT@"
+            VALUE "ProductVersion",   "@VC_VER_STR@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x809, 1200
+    END
+END

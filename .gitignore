@@ -1,0 +1,4 @@
+build/
+*.log
+Settings.local.ini
+.vs/

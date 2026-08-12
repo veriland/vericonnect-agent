@@ -1,0 +1,136 @@
+# VeriConnect (C)
+
+VeriConnect low-level agent, written in pure C11. Receives commands
+from a server through **Azure Relay Hybrid Connections** and executes
+them via pluggable **adapter** shared libraries.
+
+The Hybrid Connections listener protocol is implemented from scratch —
+SAS token generation, WebSocket client, control channel + rendezvous
+handling, proactive token renewal and automatic reconnect — with no
+third-party dependencies.
+
+## Layout
+
+```
+core/                 Portable C11 - no platform code. The reusable heart.
+  include/vc/         Public headers
+  src/                JSON, base64, SHA-256/HMAC, URL, INI, logging,
+                      SAS tokens, WebSocket client, HTTP client,
+                      Azure Relay listener, adapter loader, settings,
+                      and the agent run loop (vc_agent_run)
+platform/
+  win/                Winsock, SChannel TLS, LoadLibrary, Win32 FS (UTF-8<->UTF-16)
+  posix/              BSD sockets, OpenSSL TLS, dlopen, POSIX FS  (Linux/macOS)
+adapters/
+  filesystem/         FileSystem adapter DLL/.so: ListFolder, CreateFolder,
+                      CreateFile, ReadFile, DeleteFile, MoveFile
+apps/
+  agent-win/          vc-agent.exe   - Windows service host (SCM glue only)
+  testapp/            vc-test.exe    - verbose console tester (listen + send)
+  selftest/           vc-selftest.exe- unit checks (RFC vectors, round trips)
+config/
+  Settings.ini        Sample settings
+```
+
+**Portability rule:** everything in `core/` compiles anywhere; only
+`platform/` differs per OS. A Linux or macOS port needs a daemon `main`
+(systemd/launchd) that calls `vc_agent_run()` — the same function the
+Windows service and the test app use. The `platform/posix/` layer is
+already written (OpenSSL based) but not yet CI-tested.
+
+## Building (Windows)
+
+Requires Visual Studio 2022 (C toolset). CMake is bundled with VS.
+
+```
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+```
+
+Binaries land in `build/bin/Release/`. Run `vc-selftest.exe` to verify
+the build.
+
+Building on Linux/macOS (once a distro with OpenSSL dev headers is at
+hand): `cmake -S . -B build && cmake --build build`.
+
+## Configuration
+
+`Settings.ini` sits next to the executable:
+
+```ini
+[Connection]
+AccessKey=<SAS key>
+AccessKeyName=saspolicy
+Namespace=yournamespace.servicebus.windows.net
+HybridConnection=yourhybridconnection
+
+[Logging]
+LogLevel=LOG_DEBUG
+MaxRotateFiles=10
+MaxFileSizeInMB=10
+...
+
+[Adapters]
+Directory=.        ; where adapter libraries live, relative to the exe
+```
+
+Logs go to console (in console modes) and `VeriConnect.log` next to the
+exe, with size-based rotation.
+
+## Running
+
+**Test console (no install):**
+
+```
+vc-test listen                     # connect to Azure Relay now, verbose
+vc-test send --command ListFolder --folder C:\Temp
+vc-test send --command CreateFile --folder C:\Temp --file a.txt --content "hi" --overwrite
+vc-test send --command ReadFile   --folder C:\Temp --file a.txt --overwrite
+vc-test send --json @request.json  # raw command JSON pass-through
+```
+
+`send` posts through the relay's HTTPS endpoint exactly like the real
+server does, so `listen` + `send` gives a full end-to-end test on one
+machine.
+
+**Windows service:**
+
+```
+vc-agent --install      # then: sc start VeriConnectAgent
+vc-agent --uninstall
+vc-agent --console      # foreground with verbose output
+```
+
+## Adapter ABI
+
+Adapters are shared libraries named `vc-adapter-<name>.dll`
+(`libvc-adapter-<name>.so`/`.dylib` on POSIX) exporting:
+
+```c
+char*       RunAdapterCommand(const char* request_json); /* returns JSON */
+void        FreeAdapterString(char* p);
+const char* GetAdapterInfo(void);                        /* static JSON  */
+```
+
+All strings crossing the boundary are **UTF-8**. Command shape:
+
+```json
+{ "Adapter": "FileSystem", "Command": "CreateFile",
+  "Parameters": { "TargetFolder": "C:\\in", "FileName": "a.txt",
+                   "FileContent": "...", "OverwriteIfExists": true,
+                   "Encoding": "utf-8" } }
+```
+
+Responses carry `StatusCode`, `StatusDescription` and optionally `Data`
+(`ReadFile` returns the file content base64-encoded in `Data` and then
+moves the file into a `COPY` subfolder so a polled folder drains).
+
+## Known limitations
+
+- Request bodies larger than ~64 KB arriving over a rendezvous
+  connection are read as a single WebSocket message; large *responses*
+  are sent over a rendezvous connection automatically.
+- WebSocket accept offers (relay-tunnelled WebSockets, as opposed to
+  HTTP requests) are logged and ignored.
+- Impersonation via `UserCredentials` is not implemented; commands run
+  as the service account.
