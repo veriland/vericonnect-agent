@@ -1,0 +1,21 @@
+{
+  // Drive the build through CMakePresets.json (the same file CLion reads).
+  "cmake.useCMakePresets": "always",
+
+  // CMake Tools puts config/build/target-select controls in the status bar,
+  // so you get CLion's "pick a target, hit build/run" workflow.
+  "cmake.options.statusBarVisibility": "visible",
+
+  // Let the CMake Tools extension feed IntelliSense (compiler, includes,
+  // defines) instead of hand-maintaining c_cpp_properties.json.
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+
+  // This is a C codebase (project(... C)); tag headers so IntelliSense
+  // treats them as C rather than C++.
+  "C_Cpp.default.cStandard": "c11",
+
+  "files.associations": {
+    "*.h": "c",
+    "*.inc": "c"
+  }
+}

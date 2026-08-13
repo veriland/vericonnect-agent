@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Delegates to the CMake Tools extension, which builds the target
+      // currently selected in the status bar using the active build preset.
+      "label": "CMake: build",
+      "type": "cmake",
+      "command": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile"]
+    }
+  ]
+}

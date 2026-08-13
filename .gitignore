@@ -5,3 +5,11 @@ Settings.local.ini
 
 # Local, machine-specific Claude Code settings (do not publish)
 .claude/settings.local.json
+
+# VS Code: commit the shared project config, ignore everything else that
+# lands in .vscode/ (personal overrides, extension state, logs).
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
