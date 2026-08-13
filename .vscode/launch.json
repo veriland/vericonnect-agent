@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Debugs whatever target you have selected in the CMake status bar.
+      // This is the closest match to CLion's green "Debug" button.
+      "name": "Debug selected CMake target",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${command:cmake.launchTargetPath}",
+      "args": [],
+      "cwd": "${command:cmake.launchTargetDirectory}",
+      "environment": [],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "vc-selftest",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/${input:buildType}/vc-selftest.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build/bin/${input:buildType}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: build"
+    },
+    {
+      "name": "vc-test",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/${input:buildType}/vc-test.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build/bin/${input:buildType}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: build"
+    },
+    {
+      "name": "vc-agent",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/${input:buildType}/vc-agent.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build/bin/${input:buildType}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "buildType",
+      "type": "pickString",
+      "description": "Which configuration to launch",
+      "options": ["Debug", "Release"],
+      "default": "Debug"
+    }
+  ]
+}
