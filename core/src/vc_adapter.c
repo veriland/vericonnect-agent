@@ -3,6 +3,7 @@
 #include "vc/vc_json.h"
 #include "vc/vc_str.h"
 #include "vc/vc_log.h"
+#include "vc/vc_impersonate.h"
 #include <stdio.h>
 
 #if defined(_WIN32)
@@ -126,19 +127,56 @@ char *vc_adapter_dispatch(vc_adapter_registry *reg, const char *request_json)
     if (!request_json)
         return json_error(400, "Empty request");
 
-    /* Peek at the "Adapter" field to route. */
+    /* Parse once: route on "Adapter" and read optional "UserCredentials".
+     * `root` stays alive until after the adapter call, because the
+     * credential strings below point into it. */
     vc_adapter *ad = NULL;
+    const char *imp_user = NULL, *imp_domain = NULL, *imp_pass = NULL;
     vc_json *root = vc_json_parse(request_json);
     if (root) {
         const char *adapter_id = vc_json_get_str(root, "Adapter", NULL);
         if (adapter_id) ad = vc_adapter_find(reg, adapter_id);
-        vc_json_free(root);
+
+        vc_json *uc = vc_json_obj_get_ci(root, "UserCredentials");
+        if (uc) {
+            imp_user   = vc_json_get_str(uc, "Username", NULL);
+            imp_domain = vc_json_get_str(uc, "Domain", NULL);
+            imp_pass   = vc_json_get_str(uc, "Password", "");
+        }
     }
     if (!ad) ad = reg->first;   /* fall back to first loaded adapter */
-    if (!ad)
+    if (!ad) {
+        vc_json_free(root);
         return json_error(404, "No adapter available");
+    }
+
+    /* Optionally impersonate the requested user for just this command.
+     * Never log the password; imp_user (a name) is fine to log. */
+    vc_impersonation *imp = NULL;
+    if (imp_user && imp_user[0]) {
+        char *ierr = NULL;
+        int irc = vc_impersonate_begin(imp_user, imp_domain, imp_pass,
+                                       &imp, &ierr);
+        if (irc != VC_OK) {
+            VC_ERROR("Impersonation failed for user '%s': %s",
+                     imp_user, ierr ? ierr : "unknown error");
+            /* 501 when the platform can't do it, 403 for a rejected logon. */
+            char *e = json_error(irc == VC_E_UNSUPPORTED ? 501 : 403,
+                                 ierr ? ierr : "Impersonation failed");
+            vc_free(ierr);
+            vc_json_free(root);
+            return e;
+        }
+        VC_INFO("Impersonating user '%s' for this command", imp_user);
+    }
 
     char *raw = ad->run(request_json);
+
+    /* Revert before touching anything else, then release the parse tree
+     * (which owns the credential strings). */
+    vc_impersonate_end(imp);
+    vc_json_free(root);
+
     if (!raw)
         return json_error(500, "Adapter returned no result");
 

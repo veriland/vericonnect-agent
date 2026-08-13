@@ -143,6 +143,30 @@ Responses carry `StatusCode`, `StatusDescription` and optionally `Data`
 (`ReadFile` returns the file content base64-encoded in `Data` and then
 moves the file into a `COPY` subfolder so a polled folder drains).
 
+## Impersonation (UserCredentials)
+
+By default commands run as the agent's own service account. A command may
+carry an optional top-level `UserCredentials` object; the host then runs
+**that one command** as the named user and reverts immediately afterwards:
+
+```json
+{ "Adapter": "FileSystem", "Command": "CreateFile",
+  "UserCredentials": { "Username": "svc_files",
+                       "Domain": ".",
+                       "Password": "..." },
+  "Parameters": { "TargetFolder": "C:\\in", "FileName": "a.txt" } }
+```
+
+- `Domain` is optional; `.` or empty means a local account.
+- **Windows:** `LogonUser` + `ImpersonateLoggedOnUser`, scoped to the
+  dispatch thread. The agent's account needs the *Impersonate a client*
+  privilege (`SE_IMPERSONATE_NAME`) - LocalSystem, NetworkService and
+  most service accounts have it. A failed logon returns HTTP `403`.
+- **Linux/macOS:** unsupported - the command is rejected with `501`
+  rather than running as the service account.
+- The password is never written to the log and its transient in-memory
+  copy is zeroed after logon. Send commands only over the TLS relay.
+
 ## Known limitations
 
 - Request bodies larger than ~64 KB arriving over a rendezvous
@@ -150,5 +174,7 @@ moves the file into a `COPY` subfolder so a polled folder drains).
   are sent over a rendezvous connection automatically.
 - WebSocket accept offers (relay-tunnelled WebSockets, as opposed to
   HTTP requests) are logged and ignored.
-- Impersonation via `UserCredentials` is not implemented; commands run
-  as the service account.
+- Impersonation via `UserCredentials` is implemented on **Windows** only
+  (see below). On Linux/macOS a command carrying `UserCredentials` is
+  rejected with a "not supported on this platform" error rather than
+  silently running as the service account.

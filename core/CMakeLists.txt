@@ -27,6 +27,7 @@ if(WIN32)
         ../platform/win/vc_dynlib_win.c
         ../platform/win/vc_fs_win.c
         ../platform/win/vc_os_win.c
+        ../platform/win/vc_impersonate_win.c
     )
 else()
     list(APPEND VC_CORE_SOURCES
@@ -35,6 +36,7 @@ else()
         ../platform/posix/vc_dynlib_posix.c
         ../platform/posix/vc_fs_posix.c
         ../platform/posix/vc_os_posix.c
+        ../platform/posix/vc_impersonate_posix.c
     )
 endif()
 

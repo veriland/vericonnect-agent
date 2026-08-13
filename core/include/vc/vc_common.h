@@ -30,7 +30,8 @@ typedef enum vc_err {
     VC_E_CLOSED       = -7,
     VC_E_PROTOCOL     = -8,
     VC_E_TLS          = -9,
-    VC_E_EXISTS       = -10
+    VC_E_EXISTS       = -10,
+    VC_E_UNSUPPORTED  = -11
 } vc_err;
 
 /* malloc that mirrors the adapter ABI contract: buffers returned by an
