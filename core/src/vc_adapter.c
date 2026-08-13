@@ -137,7 +137,13 @@ char *vc_adapter_dispatch(vc_adapter_registry *reg, const char *request_json)
         const char *adapter_id = vc_json_get_str(root, "Adapter", NULL);
         if (adapter_id) ad = vc_adapter_find(reg, adapter_id);
 
-        vc_json *uc = vc_json_obj_get_ci(root, "UserCredentials");
+        /* UserCredentials lives inside "Parameters" (matching the Delphi
+         * TFileSystemParams.UserCredentials); accept it at the top level
+         * too for backward compatibility. */
+        vc_json *params = vc_json_obj_get_ci(root, "Parameters");
+        vc_json *uc = params ? vc_json_obj_get_ci(params, "UserCredentials")
+                             : NULL;
+        if (!uc) uc = vc_json_obj_get_ci(root, "UserCredentials");
         if (uc) {
             imp_user   = vc_json_get_str(uc, "Username", NULL);
             imp_domain = vc_json_get_str(uc, "Domain", NULL);

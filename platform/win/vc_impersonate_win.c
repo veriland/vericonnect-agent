@@ -16,7 +16,9 @@
 #include <string.h>
 
 struct vc_impersonation {
-    HANDLE token;
+    int active;   /* marker: RevertToSelf owed. The logon token is closed
+                     immediately after ImpersonateLoggedOnUser, mirroring
+                     the Delphi TBaseCommand.Impersonate finally block. */
 };
 
 static wchar_t *utf8_to_wide(const char *s)
@@ -49,32 +51,24 @@ int vc_impersonate_begin(const char *user, const char *domain,
         return VC_E_INVALID_ARG;
     }
 
-    /* "." or empty domain means a local account on this machine. */
-    bool local = !(domain && domain[0]) || strcmp(domain, ".") == 0;
-
+    /* Match the Delphi TBaseCommand.Impersonate exactly: username, domain
+     * and password are passed to LogonUser as-is (domain may be empty),
+     * with LOGON32_LOGON_INTERACTIVE / LOGON32_PROVIDER_DEFAULT and no
+     * fallback logon type. */
     wchar_t *wuser = utf8_to_wide(user);
-    wchar_t *wdom  = local ? NULL : utf8_to_wide(domain);
+    wchar_t *wdom  = utf8_to_wide(domain   ? domain   : "");
     wchar_t *wpass = utf8_to_wide(password ? password : "");
-    if (!wuser || !wpass || (!local && !wdom)) {
+    if (!wuser || !wdom || !wpass) {
         vc_free(wuser); vc_free(wdom); vc_free(wpass);
         if (err) *err = vc_strdup("Credential encoding failed");
         return VC_E_NOMEM;
     }
 
-    /* Prefer an interactive-quality token; fall back to a network logon
-     * only when the account lacks the "log on locally" right. */
-    const DWORD types[2] = { LOGON32_LOGON_INTERACTIVE, LOGON32_LOGON_NETWORK };
     HANDLE token = NULL;
-    DWORD  last = 0;
-    BOOL   ok = FALSE;
-    for (int i = 0; i < 2 && !ok; i++) {
-        ok = LogonUserW(wuser, wdom ? wdom : L".", wpass,
-                        types[i], LOGON32_PROVIDER_DEFAULT, &token);
-        if (!ok) {
-            last = GetLastError();
-            if (last != ERROR_LOGON_TYPE_NOT_GRANTED) break;
-        }
-    }
+    BOOL   ok = LogonUserW(wuser, wdom, wpass,
+                           LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT,
+                           &token);
+    DWORD  last = ok ? 0 : GetLastError();
 
     /* Scrub the plaintext password copy before releasing it. */
     if (wpass) SecureZeroMemory(wpass, (wcslen(wpass) + 1) * sizeof(wchar_t));
@@ -85,21 +79,22 @@ int vc_impersonate_begin(const char *user, const char *domain,
         return VC_E_FAIL;
     }
 
-    if (!ImpersonateLoggedOnUser(token)) {
-        DWORD e = GetLastError();
-        CloseHandle(token);
-        if (err) *err = msg_with_code("Impersonation failed (Win32 error %lu)", e);
+    BOOL imp_ok = ImpersonateLoggedOnUser(token);
+    DWORD imp_err = imp_ok ? 0 : GetLastError();
+    CloseHandle(token);   /* as in the Delphi finally, once impersonating */
+
+    if (!imp_ok) {
+        if (err) *err = msg_with_code("Impersonation failed (Win32 error %lu)", imp_err);
         return VC_E_FAIL;
     }
 
     vc_impersonation *imp = vc_alloc(sizeof *imp);
     if (!imp) {
         RevertToSelf();
-        CloseHandle(token);
         if (err) *err = vc_strdup("Out of memory");
         return VC_E_NOMEM;
     }
-    imp->token = token;
+    imp->active = 1;
     if (out) *out = imp;
     return VC_OK;
 }
@@ -108,6 +103,5 @@ void vc_impersonate_end(vc_impersonation *imp)
 {
     if (!imp) return;
     RevertToSelf();
-    if (imp->token) CloseHandle(imp->token);
     vc_free(imp);
 }

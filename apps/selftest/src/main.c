@@ -260,6 +260,26 @@ static void test_adapter_roundtrip(void)
     vc_json_free(j);
     vc_free(res);
 
+    /* Impersonation wiring: UserCredentials inside Parameters with a bogus
+     * user must fail before the file op runs - never 200/404 from the
+     * adapter. Windows -> 403 (logon failed); POSIX -> 501 (unsupported). */
+    res = vc_adapter_dispatch(&reg,
+        "{\"Adapter\":\"FileSystem\",\"Command\":\"CreateFile\",\"Parameters\":{"
+        "\"TargetFolder\":\"C:\\\\\",\"FileName\":\"vc_imp_selftest.txt\","
+        "\"UserCredentials\":{\"Domain\":\"\","
+        "\"Username\":\"vc_no_such_user_zzz\",\"Password\":\"x\"}}}");
+    j = vc_json_parse(res);
+    {
+        int sc = j ? (int)vc_json_get_num(j, "StatusCode", 0) : 0;
+#if defined(_WIN32)
+        CHECK("impersonation bad creds -> 403", sc == 403);
+#else
+        CHECK("impersonation unsupported -> 501", sc == 501);
+#endif
+    }
+    vc_json_free(j);
+    vc_free(res);
+
     vc_free(tmp);
     vc_free(exe_dir);
     vc_adapter_registry_unload(&reg);

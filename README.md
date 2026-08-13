@@ -145,27 +145,33 @@ moves the file into a `COPY` subfolder so a polled folder drains).
 
 ## Impersonation (UserCredentials)
 
-By default commands run as the agent's own service account. A command may
-carry an optional top-level `UserCredentials` object; the host then runs
-**that one command** as the named user and reverts immediately afterwards:
+By default commands run as the agent's own service account. When the
+command's `Parameters` carry a `UserCredentials` object, the host runs
+**that one command** as the named user and reverts immediately afterwards
+(the same mechanism as the Delphi `TBaseCommand.Impersonate`):
 
 ```json
 { "Adapter": "FileSystem", "Command": "CreateFile",
-  "UserCredentials": { "Username": "svc_files",
-                       "Domain": ".",
-                       "Password": "..." },
-  "Parameters": { "TargetFolder": "C:\\in", "FileName": "a.txt" } }
+  "Parameters": { "TargetFolder": "C:\\in", "FileName": "a.txt",
+                  "UserCredentials": { "Domain": "CORP",
+                                       "Username": "svc_files",
+                                       "Password": "..." } } }
 ```
 
-- `Domain` is optional; `.` or empty means a local account.
-- **Windows:** `LogonUser` + `ImpersonateLoggedOnUser`, scoped to the
-  dispatch thread. The agent's account needs the *Impersonate a client*
-  privilege (`SE_IMPERSONATE_NAME`) - LocalSystem, NetworkService and
-  most service accounts have it. A failed logon returns HTTP `403`.
+- Impersonation is applied when `Username` is non-empty. `Domain` and
+  `Password` are passed to `LogonUser` as given (`Domain` may be empty).
+- **Windows:** `LogonUser` (`LOGON32_LOGON_INTERACTIVE`,
+  `LOGON32_PROVIDER_DEFAULT`) + `ImpersonateLoggedOnUser`, scoped to the
+  dispatch thread, reverted with `RevertToSelf`. The agent's account
+  needs the *Impersonate a client* privilege (`SE_IMPERSONATE_NAME`) -
+  LocalSystem, NetworkService and most service accounts have it. A failed
+  logon returns HTTP `403`.
 - **Linux/macOS:** unsupported - the command is rejected with `501`
   rather than running as the service account.
 - The password is never written to the log and its transient in-memory
   copy is zeroed after logon. Send commands only over the TLS relay.
+- A `UserCredentials` object at the top level of the command is also
+  accepted, for backward compatibility.
 
 ## Known limitations
 
