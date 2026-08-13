@@ -152,7 +152,7 @@ int vc_http_request(const char *method, const char *host, int port,
             out->body = (uint8_t *)vc_buf_take(&dec);
         } else {
             out->body_len = in.len - body_off;
-            out->body = vc_alloc(out->body_len + 1);
+            out->body = static_cast<uint8_t*>(vc_alloc(out->body_len + 1));
             if (out->body) {
                 memcpy(out->body, in.data + body_off, out->body_len);
                 out->body[out->body_len] = 0;

@@ -26,7 +26,7 @@ static wchar_t *utf8_to_wide(const char *s)
     if (!s) return NULL;
     int wlen = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
     if (wlen <= 0) return NULL;
-    wchar_t *w = vc_alloc((size_t)wlen * sizeof(wchar_t));
+    wchar_t *w = static_cast<wchar_t*>(vc_alloc((size_t)wlen * sizeof(wchar_t)));
     if (!w) return NULL;
     MultiByteToWideChar(CP_UTF8, 0, s, -1, w, wlen);
     return w;
@@ -88,7 +88,7 @@ int vc_impersonate_begin(const char *user, const char *domain,
         return VC_E_FAIL;
     }
 
-    vc_impersonation *imp = vc_alloc(sizeof *imp);
+    vc_impersonation *imp = static_cast<vc_impersonation*>(vc_alloc(sizeof *imp));
     if (!imp) {
         RevertToSelf();
         if (err) *err = vc_strdup("Out of memory");

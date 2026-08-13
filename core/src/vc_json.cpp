@@ -8,7 +8,7 @@
 
 static vc_json *json_new(vc_json_type t)
 {
-    vc_json *v = vc_alloc(sizeof *v);
+    vc_json *v = static_cast<vc_json*>(vc_alloc(sizeof *v));
     if (!v) return NULL;
     memset(v, 0, sizeof *v);
     v->type = t;

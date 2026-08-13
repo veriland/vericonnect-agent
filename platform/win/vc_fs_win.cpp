@@ -8,7 +8,7 @@ static wchar_t *utf8_to_wide(const char *s)
 {
     int wlen = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
     if (wlen <= 0) return NULL;
-    wchar_t *w = vc_alloc((size_t)wlen * sizeof(wchar_t));
+    wchar_t *w = static_cast<wchar_t*>(vc_alloc((size_t)wlen * sizeof(wchar_t)));
     if (!w) return NULL;
     MultiByteToWideChar(CP_UTF8, 0, s, -1, w, wlen);
     return w;
@@ -18,7 +18,7 @@ static char *wide_to_utf8(const wchar_t *w)
 {
     int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
     if (len <= 0) return NULL;
-    char *s = vc_alloc((size_t)len);
+    char *s = static_cast<char*>(vc_alloc((size_t)len));
     if (!s) return NULL;
     WideCharToMultiByte(CP_UTF8, 0, w, -1, s, len, NULL, NULL);
     return s;
@@ -86,7 +86,7 @@ int vc_fs_read_all(const char *path, uint8_t **out, size_t *out_len)
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return VC_E_IO; }
     size_t total = (size_t)sz.QuadPart;
-    uint8_t *buf = vc_alloc(total + 1);
+    uint8_t *buf = static_cast<uint8_t*>(vc_alloc(total + 1));
     if (!buf) { CloseHandle(h); return VC_E_NOMEM; }
 
     size_t off = 0;
@@ -112,7 +112,7 @@ int vc_fs_write_all(const char *path, const void *data, size_t len)
     vc_free(w);
     if (h == INVALID_HANDLE_VALUE) return VC_E_IO;
 
-    const uint8_t *p = data;
+    const uint8_t *p = static_cast<const uint8_t*>(data);
     size_t off = 0;
     int rc = VC_OK;
     while (off < len) {
@@ -141,7 +141,7 @@ int vc_fs_list_files(const char *dir, char ***names, size_t *count)
     if (h == INVALID_HANDLE_VALUE) return VC_E_NOT_FOUND;
 
     size_t cap = 16, n = 0;
-    char **arr = vc_alloc(cap * sizeof(char *));
+    char **arr = static_cast<char**>(vc_alloc(cap * sizeof(char *)));
     if (!arr) { FindClose(h); return VC_E_NOMEM; }
 
     do {
@@ -150,7 +150,7 @@ int vc_fs_list_files(const char *dir, char ***names, size_t *count)
         if (!name) continue;
         if (n == cap) {
             cap *= 2;
-            char **na = vc_realloc(arr, cap * sizeof(char *));
+            char **na = static_cast<char**>(vc_realloc(arr, cap * sizeof(char *)));
             if (!na) { vc_free(name); break; }
             arr = na;
         }

@@ -10,7 +10,7 @@ char *vc_strdup(const char *s)
 {
     if (!s) return NULL;
     size_t n = strlen(s);
-    char *p = vc_alloc(n + 1);
+    char *p = static_cast<char*>(vc_alloc(n + 1));
     if (p) memcpy(p, s, n + 1);
     return p;
 }
@@ -18,7 +18,7 @@ char *vc_strdup(const char *s)
 char *vc_strndup(const char *s, size_t n)
 {
     if (!s) return NULL;
-    char *p = vc_alloc(n + 1);
+    char *p = static_cast<char*>(vc_alloc(n + 1));
     if (!p) return NULL;
     memcpy(p, s, n);
     p[n] = 0;
@@ -39,7 +39,7 @@ int vc_buf_reserve(vc_buf *b, size_t extra)
     if (need <= b->cap) return VC_OK;
     size_t cap = b->cap ? b->cap : 64;
     while (cap < need) cap *= 2;
-    char *p = vc_realloc(b->data, cap);
+    char *p = static_cast<char*>(vc_realloc(b->data, cap));
     if (!p) return VC_E_NOMEM;
     b->data = p;
     b->cap = cap;
@@ -85,7 +85,7 @@ int vc_buf_appendf(vc_buf *b, const char *fmt, ...)
 char *vc_buf_take(vc_buf *b)
 {
     if (!b->data) {
-        char *e = vc_alloc(1);
+        char *e = static_cast<char*>(vc_alloc(1));
         if (e) e[0] = 0;
         return e;
     }

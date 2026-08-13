@@ -5,9 +5,9 @@ static const char B64_TAB[] =
 
 char *vc_base64_encode(const void *data, size_t len)
 {
-    const uint8_t *p = data;
+    const uint8_t *p = static_cast<const uint8_t*>(data);
     size_t out_len = ((len + 2) / 3) * 4;
-    char *out = vc_alloc(out_len + 1);
+    char *out = static_cast<char*>(vc_alloc(out_len + 1));
     if (!out) return NULL;
     size_t o = 0;
     size_t i = 0;
@@ -51,7 +51,7 @@ uint8_t *vc_base64_decode(const char *text, size_t *out_len)
 {
     if (!text) return NULL;
     size_t tlen = strlen(text);
-    uint8_t *out = vc_alloc(tlen / 4 * 3 + 3);
+    uint8_t *out = static_cast<uint8_t*>(vc_alloc(tlen / 4 * 3 + 3));
     if (!out) return NULL;
 
     size_t o = 0;

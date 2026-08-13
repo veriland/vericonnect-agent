@@ -59,7 +59,7 @@ void vc_sha256_init(vc_sha256_ctx *ctx)
 
 void vc_sha256_update(vc_sha256_ctx *ctx, const void *data, size_t len)
 {
-    const uint8_t *p = data;
+    const uint8_t *p = static_cast<const uint8_t*>(data);
     ctx->bitlen += (uint64_t)len * 8;
     while (len > 0) {
         size_t take = 64 - ctx->buflen;

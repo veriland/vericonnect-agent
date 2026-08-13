@@ -1,8 +1,8 @@
 # The FileSystem adapter: a shared library implementing the adapter
 # ABI (RunAdapterCommand / FreeAdapterString / GetAdapterInfo).
 add_library(vc-adapter-filesystem SHARED
-    src/fs_adapter.c
-    src/fs_commands.c
+    src/fs_adapter.cpp
+    src/fs_commands.cpp
 )
 target_link_libraries(vc-adapter-filesystem PRIVATE vc_core)
 

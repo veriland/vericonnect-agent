@@ -1,5 +1,5 @@
 add_executable(vc-selftest
-    src/main.c
+    src/main.cpp
 )
 target_link_libraries(vc-selftest PRIVATE vc_core)
 vc_add_version_info(vc-selftest

@@ -141,7 +141,7 @@ static int do_handshake(vc_tls *t, const char *hostname, int timeout_ms)
 
 vc_tls *vc_tls_connect(vc_sock *sock, const char *hostname, int timeout_ms)
 {
-    vc_tls *t = vc_alloc(sizeof *t);
+    vc_tls *t = static_cast<vc_tls*>(vc_alloc(sizeof *t));
     if (!t) { vc_sock_close(sock); return NULL; }
     memset(t, 0, sizeof *t);
     t->sock = sock;
@@ -170,14 +170,14 @@ vc_tls *vc_tls_connect(vc_sock *sock, const char *hostname, int timeout_ms)
 int vc_tls_send(vc_tls *t, const void *data, size_t len)
 {
     if (!t || t->closed) return VC_E_CLOSED;
-    const uint8_t *p = data;
+    const uint8_t *p = static_cast<const uint8_t*>(data);
     size_t off = 0;
 
     size_t hdr = t->sizes.cbHeader;
     size_t trl = t->sizes.cbTrailer;
     size_t maxmsg = t->sizes.cbMaximumMessage;
 
-    uint8_t *buf = vc_alloc(hdr + maxmsg + trl);
+    uint8_t *buf = static_cast<uint8_t*>(vc_alloc(hdr + maxmsg + trl));
     if (!buf) return VC_E_NOMEM;
 
     int result = VC_OK;

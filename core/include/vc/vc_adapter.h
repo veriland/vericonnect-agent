@@ -22,9 +22,18 @@ extern "C" {
 #endif
 
 #if defined(_WIN32)
-#  define VC_ADAPTER_EXPORT __declspec(dllexport)
+#  define VC_ADAPTER_EXPORT_LINKAGE __declspec(dllexport)
 #else
-#  define VC_ADAPTER_EXPORT __attribute__((visibility("default")))
+#  define VC_ADAPTER_EXPORT_LINKAGE __attribute__((visibility("default")))
+#endif
+
+/* Adapter entry points must keep C linkage so the host resolves them by
+ * their plain names (RunAdapterCommand, ...). When an adapter is compiled
+ * as C++, name mangling would otherwise hide them from vc_dynlib_sym. */
+#ifdef __cplusplus
+#  define VC_ADAPTER_EXPORT extern "C" VC_ADAPTER_EXPORT_LINKAGE
+#else
+#  define VC_ADAPTER_EXPORT VC_ADAPTER_EXPORT_LINKAGE
 #endif
 
 typedef char*       (*vc_adapter_run_fn)(const char *request_json);

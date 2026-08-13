@@ -4,39 +4,39 @@
 # loading, filesystem) live under platform/ and are selected here.
 
 set(VC_CORE_SOURCES
-    src/vc_str.c
-    src/vc_json.c
-    src/vc_base64.c
-    src/vc_sha256.c
-    src/vc_url.c
-    src/vc_ini.c
-    src/vc_log.c
-    src/vc_sas.c
-    src/vc_ws.c
-    src/vc_http.c
-    src/vc_relay.c
-    src/vc_adapter.c
-    src/vc_settings.c
-    src/vc_agent.c
+    src/vc_str.cpp
+    src/vc_json.cpp
+    src/vc_base64.cpp
+    src/vc_sha256.cpp
+    src/vc_url.cpp
+    src/vc_ini.cpp
+    src/vc_log.cpp
+    src/vc_sas.cpp
+    src/vc_ws.cpp
+    src/vc_http.cpp
+    src/vc_relay.cpp
+    src/vc_adapter.cpp
+    src/vc_settings.cpp
+    src/vc_agent.cpp
 )
 
 if(WIN32)
     list(APPEND VC_CORE_SOURCES
-        ../platform/win/vc_sock_win.c
-        ../platform/win/vc_tls_schannel.c
-        ../platform/win/vc_dynlib_win.c
-        ../platform/win/vc_fs_win.c
-        ../platform/win/vc_os_win.c
-        ../platform/win/vc_impersonate_win.c
+        ../platform/win/vc_sock_win.cpp
+        ../platform/win/vc_tls_schannel.cpp
+        ../platform/win/vc_dynlib_win.cpp
+        ../platform/win/vc_fs_win.cpp
+        ../platform/win/vc_os_win.cpp
+        ../platform/win/vc_impersonate_win.cpp
     )
 else()
     list(APPEND VC_CORE_SOURCES
-        ../platform/posix/vc_sock_posix.c
-        ../platform/posix/vc_tls_openssl.c
-        ../platform/posix/vc_dynlib_posix.c
-        ../platform/posix/vc_fs_posix.c
-        ../platform/posix/vc_os_posix.c
-        ../platform/posix/vc_impersonate_posix.c
+        ../platform/posix/vc_sock_posix.cpp
+        ../platform/posix/vc_tls_openssl.cpp
+        ../platform/posix/vc_dynlib_posix.cpp
+        ../platform/posix/vc_fs_posix.cpp
+        ../platform/posix/vc_os_posix.cpp
+        ../platform/posix/vc_impersonate_posix.cpp
     )
 endif()
 

@@ -24,7 +24,7 @@ typedef struct agent_state {
 static int on_request(void *user, const vc_relay_request *req,
                       vc_relay_response *resp)
 {
-    agent_state *st = user;
+    agent_state *st = static_cast<agent_state*>(user);
 
     VC_INFO("REQUEST [%s] %s %s (%zu byte body)",
             req->id, req->method, req->target, req->body_len);

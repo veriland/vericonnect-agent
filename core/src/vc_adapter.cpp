@@ -50,7 +50,7 @@ static int load_one(vc_adapter_registry *reg, const char *path)
         return VC_E_PROTOCOL;
     }
 
-    vc_adapter *ad = vc_alloc(sizeof *ad);
+    vc_adapter *ad = static_cast<vc_adapter*>(vc_alloc(sizeof *ad));
     if (!ad) { vc_dynlib_close(handle); return VC_E_NOMEM; }
     memset(ad, 0, sizeof *ad);
     ad->handle = handle;

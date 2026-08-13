@@ -17,7 +17,7 @@ struct vc_ini {
 
 vc_ini *vc_ini_new(void)
 {
-    vc_ini *ini = vc_alloc(sizeof *ini);
+    vc_ini *ini = static_cast<vc_ini*>(vc_alloc(sizeof *ini));
     if (ini) ini->first = NULL;
     return ini;
 }
@@ -153,7 +153,7 @@ int vc_ini_set(vc_ini *ini, const char *section, const char *key,
         e->value = nv;
         return VC_OK;
     }
-    e = vc_alloc(sizeof *e);
+    e = static_cast<ini_entry*>(vc_alloc(sizeof *e));
     if (!e) return VC_E_NOMEM;
     e->section = vc_strdup(section ? section : "");
     e->key     = vc_strdup(key);

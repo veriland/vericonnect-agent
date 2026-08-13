@@ -85,7 +85,7 @@ vc_sock *vc_sock_connect(const char *host, int port, int timeout_ms)
     BOOL ka = TRUE;
     setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char *)&ka, sizeof ka);
 
-    vc_sock *vs = vc_alloc(sizeof *vs);
+    vc_sock *vs = static_cast<vc_sock*>(vc_alloc(sizeof *vs));
     if (!vs) { closesocket(sock); return NULL; }
     vs->s = sock;
     return vs;
@@ -100,7 +100,7 @@ void vc_sock_close(vc_sock *s)
 
 int vc_sock_send(vc_sock *s, const void *data, size_t len)
 {
-    const char *p = data;
+    const char *p = static_cast<const char*>(data);
     size_t sent = 0;
     while (sent < len) {
         int n = send(s->s, p + sent, (int)(len - sent), 0);
@@ -122,7 +122,7 @@ int vc_sock_recv(vc_sock *s, void *buf, size_t len, int timeout_ms)
     if (sel == 0) return VC_E_TIMEOUT;
     if (sel == SOCKET_ERROR) return VC_E_IO;
 
-    int n = recv(s->s, buf, (int)len, 0);
+    int n = recv(s->s, static_cast<char*>(buf), (int)len, 0);
     if (n == 0) return 0;
     if (n == SOCKET_ERROR) return VC_E_IO;
     return n;

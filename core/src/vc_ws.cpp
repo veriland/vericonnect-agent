@@ -48,7 +48,7 @@ vc_ws *vc_ws_connect(const char *host, int port,
     vc_tls *tls = vc_tls_connect(sock, host, timeout_ms);
     if (!tls) return NULL;   /* vc_tls_connect closes sock on failure */
 
-    vc_ws *ws = vc_alloc(sizeof *ws);
+    vc_ws *ws = static_cast<vc_ws*>(vc_alloc(sizeof *ws));
     if (!ws) { vc_tls_close(tls); return NULL; }
     ws->tls = tls;
     ws->closed = false;
@@ -149,7 +149,7 @@ static int send_frame(vc_ws *ws, uint8_t opcode, bool fin,
 int vc_ws_send(vc_ws *ws, vc_ws_msg_type type, const void *data, size_t len)
 {
     if (!ws || ws->closed) return VC_E_CLOSED;
-    const uint8_t *p = data;
+    const uint8_t *p = static_cast<const uint8_t*>(data);
     uint8_t opcode = (type == VC_WS_TEXT) ? 0x1 : 0x2;
 
     if (len <= VC_WS_FRAG_SIZE)
@@ -223,7 +223,7 @@ static int parse_frame(vc_ws *ws, uint8_t *opcode, bool *fin,
     }
     if (avail < pos + (size_t)len) return VC_E_TIMEOUT;
 
-    uint8_t *out = vc_alloc((size_t)len + 1);
+    uint8_t *out = static_cast<uint8_t*>(vc_alloc((size_t)len + 1));
     if (!out) return VC_E_NOMEM;
     memcpy(out, p + pos, (size_t)len);
     if (masked)
