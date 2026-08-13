@@ -184,3 +184,20 @@ command's `Parameters` carry a `UserCredentials` object, the host runs
   (see below). On Linux/macOS a command carrying `UserCredentials` is
   rejected with a "not supported on this platform" error rather than
   silently running as the service account.
+
+## License
+
+VeriConnect is **source-available** under the
+[Business Source License 1.1](LICENSE). You may read, audit, modify, and make
+the production use permitted by the Additional Use Grant in the license — but
+you may not use it to offer a competing product or service. Each version
+converts to the Apache License 2.0 on its Change Date.
+
+For commercial licensing outside these terms, contact eralpe@veriland.co.uk.
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) —
+all commits must be signed off under the [Developer Certificate of Origin](DCO)
+(`git commit -s`). To report a security issue privately, see
+[SECURITY.md](SECURITY.md).
