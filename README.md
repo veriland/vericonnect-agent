@@ -9,6 +9,21 @@ SAS token generation, WebSocket client, control channel + rendezvous
 handling, proactive token renewal and automatic reconnect — with no
 third-party dependencies.
 
+## Role
+
+VeriConnect is the **on-premise agent** in a larger integration story. It
+lets Microsoft **Dynamics 365 Finance & Operations (D365FO)** and
+**Customer Engagement (CE)** reach resources that live behind a customer's
+firewall: the cloud application sends a command over Azure Relay, the agent
+executes it locally through the matching adapter and returns the result —
+no inbound firewall ports and no VPN required.
+
+Every capability is an **adapter**. The **FileSystem** adapter ships today.
+Planned adapters extend the agent to more back ends — **MSSQL**, **Azure
+SQL** and other SQL databases, and generic **HTTP/API** calls — each a
+drop-in `vc-adapter-<name>` library speaking the same ABI. The agent core
+stays fixed; the set of adapters grows.
+
 ## Layout
 
 ```
@@ -42,12 +57,20 @@ below) and not yet CI-tested.
 
 ## Building (Windows)
 
-Requires Visual Studio 2022 (C toolset). CMake is bundled with VS.
+Requires the MSVC C11 toolchain and CMake ≥ 3.20. You do **not** need the
+full Visual Studio IDE — the free standalone [Build Tools for Visual Studio
+2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+("Desktop development with C++" workload) are enough, and bundle CMake.
+Visual Studio 2019 (16.8 or newer) also works, since that is where MSVC
+gained C11 support. Older toolsets (VS 2017 and earlier) predate C11 and
+will not build the agent.
 
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
+
+(On VS 2019, use `-G "Visual Studio 16 2019"` instead.)
 
 Binaries land in `build/bin/Release/`. Run `vc-selftest.exe` to verify
 the build.
