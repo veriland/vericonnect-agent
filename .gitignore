@@ -2,3 +2,6 @@ build/
 *.log
 Settings.local.ini
 .vs/
+
+# Local, machine-specific Claude Code settings (do not publish)
+.claude/settings.local.json

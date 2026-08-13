@@ -1,0 +1,45 @@
+name: DCO
+
+# Verifies that every commit in a pull request carries a valid
+# "Signed-off-by" line matching the commit author (Developer Certificate
+# of Origin 1.1). See CONTRIBUTING.md and the DCO file.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR commits
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify Signed-off-by on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for sha in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%B' "$sha" \
+                 | grep -qiE "^Signed-off-by: .+ <.+@.+>"; then
+              echo "::error::Commit $sha by $author is missing a Signed-off-by line."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "One or more commits are not signed off."
+            echo "Fix with:  git rebase --signoff ${BASE_SHA}  &&  git push --force-with-lease"
+            exit 1
+          fi
+          echo "All commits are signed off."
