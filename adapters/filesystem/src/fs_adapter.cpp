@@ -21,6 +21,8 @@
 #include <cstring>
 #include <format>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 
 namespace {
 
@@ -42,15 +44,27 @@ std::string make_error(int code, std::string_view desc)
     return o.dump();
 }
 
-bool iequals(std::string_view a, std::string_view b) noexcept
+std::string to_lower(std::string_view s)
 {
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); i++)
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i])))
-            return false;
-    return true;
+    std::string out(s.size(), '\0');
+    for (std::size_t i = 0; i < s.size(); i++)
+        out[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(s[i])));
+    return out;
 }
+
+/* Command dispatch table. Keys are lowercase; the incoming command is
+ * normalized before lookup so matching stays case-insensitive. */
+using Handler = std::string (*)(const Json &);
+
+const std::unordered_map<std::string_view, Handler> handlers = {
+    {"listfolder",   fs_cmd::list_folder},
+    {"createfolder", fs_cmd::create_folder},
+    {"createfile",   fs_cmd::create_file},
+    {"readfile",     fs_cmd::read_file},
+    {"deletefile",   fs_cmd::delete_file},
+    {"movefile",     fs_cmd::move_file},
+    {"move",         fs_cmd::move_file},
+};
 
 std::string run(std::string_view request_json)
 {
@@ -60,12 +74,8 @@ std::string run(std::string_view request_json)
     std::string_view cmd = root->get_str("Command", "");
     if (cmd.empty()) return make_error(400, "\"Command\" parameter is required.");
 
-    if (iequals(cmd, "ListFolder"))   return fs_cmd::list_folder(*root);
-    if (iequals(cmd, "CreateFolder")) return fs_cmd::create_folder(*root);
-    if (iequals(cmd, "CreateFile"))   return fs_cmd::create_file(*root);
-    if (iequals(cmd, "ReadFile"))     return fs_cmd::read_file(*root);
-    if (iequals(cmd, "DeleteFile"))   return fs_cmd::delete_file(*root);
-    if (iequals(cmd, "MoveFile") || iequals(cmd, "Move")) return fs_cmd::move_file(*root);
+    if (auto it = handlers.find(to_lower(cmd)); it != handlers.end())
+        return it->second(*root);
 
     return make_error(404, std::format("Command \"{}\" not found.", cmd));
 }
