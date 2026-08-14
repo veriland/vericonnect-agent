@@ -13,7 +13,7 @@ Instead, report privately using one of:
 
 - GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
   (the **Security** tab → **Report a vulnerability**), or
-- Email **eralpe@veriland.co.uk** with the details.
+- Email **security@veriland.co.uk** with the details.
 
 Please include:
 
