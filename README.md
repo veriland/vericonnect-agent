@@ -1,8 +1,9 @@
-# VeriConnect (C)
+# VeriConnect Agent
 
-VeriConnect low-level agent, written in pure C11. Receives commands
-from a server through **Azure Relay Hybrid Connections** and executes
-them via pluggable **adapter** shared libraries.
+The VeriConnect Agent is the on-premise component of **VeriConnect**,
+written in modern **C++23**. It receives commands from a server through
+**Azure Relay Hybrid Connections** and executes them via pluggable
+**adapter** shared libraries.
 
 The Hybrid Connections listener protocol is implemented from scratch —
 SAS token generation, WebSocket client, control channel + rendezvous
@@ -11,7 +12,7 @@ third-party dependencies.
 
 ## Role
 
-VeriConnect is the **on-premise agent** in a larger integration story. It
+The Agent is the **on-premise** piece of a larger integration story. It
 lets Microsoft **Dynamics 365 Finance & Operations (D365FO)** and
 **Customer Engagement (CE)** reach resources that live behind a customer's
 firewall: the cloud application sends a command over Azure Relay, the agent
@@ -27,7 +28,7 @@ stays fixed; the set of adapters grows.
 ## Layout
 
 ```
-core/                 Portable C11 - no platform code. The reusable heart.
+core/                 Portable C++23 - no platform code. The reusable heart.
   include/vc/         Public headers
   src/                JSON, base64, SHA-256/HMAC, URL, INI, logging,
                       SAS tokens, WebSocket client, HTTP client,
@@ -48,7 +49,9 @@ config/
   Settings.ini        Sample settings
 ```
 
-**Portability rule:** everything in `core/` compiles anywhere; only
+Core headers keep the `.h` suffix and public C++ symbols; the
+implementation lives in `.cpp` alongside them. **Portability rule:**
+everything in `core/` compiles anywhere; only
 `platform/` differs per OS. The Windows service (`apps/agent-win`), the
 Linux/macOS host (`apps/agent-posix`) and the console test app all call
 the same `vc_agent_run()`; only process hosting differs. The
@@ -57,25 +60,24 @@ below) and not yet CI-tested.
 
 ## Building (Windows)
 
-Requires the MSVC C11 toolchain and CMake ≥ 3.20. You do **not** need the
-full Visual Studio IDE — the free standalone [Build Tools for Visual Studio
-2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-("Desktop development with C++" workload) are enough, and bundle CMake.
-Visual Studio 2019 (16.8 or newer) also works, since that is where MSVC
-gained C11 support. Older toolsets (VS 2017 and earlier) predate C11 and
-will not build the agent.
+Requires an MSVC toolchain with C++23 support and CMake ≥ 3.20. You do
+**not** need the full Visual Studio IDE — the free standalone [Build Tools
+for Visual Studio 2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+("Desktop development with C++" workload) are enough, and bundle CMake. A
+recent Visual Studio 2022 (17.x) toolset is needed for the C++23 standard;
+earlier toolsets (VS 2019 and older) do not support C++23 and will not
+build the agent.
 
 ```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-(On VS 2019, use `-G "Visual Studio 16 2019"` instead.)
-
 Binaries land in `build/bin/Release/`. Run `vc-selftest.exe` to verify
 the build.
 
-**Building on Linux/macOS** (needs OpenSSL dev headers):
+**Building on Linux/macOS** (needs a C++23 compiler — GCC 13+ or Clang
+16+ — and OpenSSL dev headers):
 
 ```
 cmake -S . -B build && cmake --build build
