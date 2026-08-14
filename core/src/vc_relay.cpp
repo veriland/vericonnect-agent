@@ -10,8 +10,7 @@
  *  - The listener answers HTTP requests with
  *      {"response": {...}}  followed by the body as a binary message
  *    over the control channel (small bodies) or over a rendezvous
- *    WebSocket dialed to the request's "address" (large bodies or
- *    rendezvous-only requests).
+ *    WebSocket dialed to the request's "address" (large bodies).
  *  - Tokens are renewed proactively with {"renewToken":{"token":..}}.
  */
 #include "vc/vc_relay.h"
@@ -19,385 +18,367 @@
 #include "vc/vc_sas.h"
 #include "vc/vc_json.h"
 #include "vc/vc_url.h"
-#include "vc/vc_str.h"
 #include "vc/vc_os.h"
-#include <stdio.h>
+#include "vc/vc_sock.h"
 
-#define VC_RELAY_CTRL_BODY_MAX   (60 * 1024)  /* response via control ch */
-#define VC_RELAY_RECV_TICK_MS    1000
-#define VC_RELAY_PING_INTERVAL   30000
-#define VC_RELAY_CONNECT_TIMEOUT 20000
-#define VC_RELAY_BODY_TIMEOUT    30000
+#include <cstring>
+#include <optional>
 
-typedef struct relay_ctx {
-    const vc_relay_config    *cfg;
-    const vc_relay_callbacks *cb;
-    vc_ws   *ctrl;
-    unsigned ttl;
-    uint64_t token_renew_at;   /* monotonic ms */
-    uint64_t next_ping_at;
-} relay_ctx;
-
-static void emit(relay_ctx *rc, const char *event, int code, const char *desc)
+namespace vc
 {
-    if (rc->cb && rc->cb->on_event)
-        rc->cb->on_event(rc->cb->user, event, code, desc ? desc : "");
-}
+    namespace
+    {
+        constexpr std::size_t kCtrlBodyMax = 60 * 1024; /* response via control ch */
+        constexpr int kRecvTickMs = 1000;
+        constexpr std::uint64_t kPingInterval = 30000;
+        constexpr int kConnectTimeout = 20000;
+        constexpr int kBodyTimeout = 30000;
 
-/* ---------------------------------------------------------------- */
-/* Connection                                                        */
-/* ---------------------------------------------------------------- */
-
-static char *make_token(relay_ctx *rc)
-{
-    return vc_sas_token(rc->cfg->namespace_host, rc->cfg->hybrid_connection,
-                        rc->cfg->key_name, rc->cfg->key, rc->ttl);
-}
-
-static int ctrl_connect(relay_ctx *rc)
-{
-    char *token = make_token(rc);
-    if (!token) return VC_E_FAIL;
-    char *tok_enc = vc_url_encode(token);
-    vc_free(token);
-    if (!tok_enc) return VC_E_NOMEM;
-
-    vc_buf path;
-    vc_buf_init(&path);
-    vc_buf_appendf(&path, "/$hc/%s?sb-hc-action=listen&sb-hc-token=%s",
-                   rc->cfg->hybrid_connection, tok_enc);
-    vc_free(tok_enc);
-
-    rc->ctrl = vc_ws_connect(rc->cfg->namespace_host, 443, path.data,
-                             NULL, VC_RELAY_CONNECT_TIMEOUT);
-    vc_buf_free(&path);
-    if (!rc->ctrl) return VC_E_IO;
-
-    uint64_t now = vc_os_monotonic_ms();
-    rc->token_renew_at = now + (uint64_t)rc->ttl * 1000 * 3 / 4;
-    rc->next_ping_at   = now + VC_RELAY_PING_INTERVAL;
-    return VC_OK;
-}
-
-static void renew_token_if_due(relay_ctx *rc)
-{
-    if (vc_os_monotonic_ms() < rc->token_renew_at) return;
-    char *token = make_token(rc);
-    if (!token) return;
-
-    vc_json *root = vc_json_new_object();
-    vc_json *rt = vc_json_new_object();
-    vc_json_obj_set_str(rt, "token", token);
-    vc_json_obj_set(root, "renewToken", rt);
-    char *msg = vc_json_write(root);
-    vc_json_free(root);
-    vc_free(token);
-    if (!msg) return;
-
-    if (vc_ws_send(rc->ctrl, VC_WS_TEXT, msg, strlen(msg)) == VC_OK) {
-        rc->token_renew_at = vc_os_monotonic_ms() + (uint64_t)rc->ttl * 1000 * 3 / 4;
-        emit(rc, "TOKEN_RENEWED", 0, "SAS token renewed");
-    }
-    vc_free(msg);
-}
-
-/* ---------------------------------------------------------------- */
-/* Requests                                                          */
-/* ---------------------------------------------------------------- */
-
-static vc_json *build_response_msg(const char *request_id,
-                                   const vc_relay_response *resp,
-                                   bool has_body)
-{
-    vc_json *root = vc_json_new_object();
-    vc_json *r = vc_json_new_object();
-    vc_json_obj_set_str(r, "requestId", request_id);
-    vc_json_obj_set_num(r, "statusCode", resp->status_code);
-    if (resp->status_desc[0])
-        vc_json_obj_set_str(r, "statusDescription", resp->status_desc);
-    vc_json *hdrs = vc_json_new_object();
-    vc_json_obj_set_str(hdrs, "Content-Type",
-        resp->content_type[0] ? resp->content_type : "application/json");
-    vc_json_obj_set(r, "responseHeaders", hdrs);
-    vc_json_obj_set_bool(r, "body", has_body);
-    vc_json_obj_set(root, "response", r);
-    return root;
-}
-
-static int send_response_over(vc_ws *ws, const char *request_id,
-                              const vc_relay_response *resp)
-{
-    bool has_body = resp->body && resp->body_len > 0;
-    vc_json *msg = build_response_msg(request_id, resp, has_body);
-    char *text = vc_json_write(msg);
-    vc_json_free(msg);
-    if (!text) return VC_E_NOMEM;
-
-    int rc = vc_ws_send(ws, VC_WS_TEXT, text, strlen(text));
-    vc_free(text);
-    if (rc != VC_OK) return rc;
-
-    if (has_body)
-        rc = vc_ws_send(ws, VC_WS_BINARY, resp->body, resp->body_len);
-    return rc;
-}
-
-/* Dial the rendezvous address given in a request message. */
-static vc_ws *rendezvous_connect(relay_ctx *rc, const char *address)
-{
-    vc_url u;
-    if (vc_url_parse(address, &u) != VC_OK) return NULL;
-
-    vc_buf path;
-    vc_buf_init(&path);
-    vc_buf_append_str(&path, u.path);
-    if (u.query) {
-        vc_buf_append_char(&path, '?');
-        vc_buf_append_str(&path, u.query);
-    }
-    /* append a token unless the address already carries one */
-    if (!u.query || !strstr(u.query, "sb-hc-token=")) {
-        char *token = make_token(rc);
-        if (token) {
-            char *enc = vc_url_encode(token);
-            vc_free(token);
-            if (enc) {
-                vc_buf_appendf(&path, "%csb-hc-token=%s",
-                               u.query ? '&' : '?', enc);
-                vc_free(enc);
-            }
+        std::string_view as_view(std::span<const std::uint8_t> b)
+        {
+            return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
         }
-    }
-    vc_ws *ws = vc_ws_connect(u.host, u.port, path.data, NULL,
-                              VC_RELAY_CONNECT_TIMEOUT);
-    vc_buf_free(&path);
-    vc_url_free(&u);
-    return ws;
-}
 
-static void response_defaults(vc_relay_response *resp)
-{
-    memset(resp, 0, sizeof *resp);
-    resp->status_code = 500;
-    snprintf(resp->status_desc, sizeof resp->status_desc,
-             "Internal Server Error");
-    snprintf(resp->content_type, sizeof resp->content_type,
-             "application/json");
-}
-
-/* Reads the body (one binary message) if the request says one follows. */
-static int read_body(vc_ws *ws, bool expected, uint8_t **body, size_t *len)
-{
-    *body = NULL;
-    *len = 0;
-    if (!expected) return VC_OK;
-    vc_ws_msg_type type;
-    int rc = vc_ws_recv_msg(ws, &type, body, len, VC_RELAY_BODY_TIMEOUT);
-    if (rc != VC_OK) return rc;
-    if (type != VC_WS_BINARY) {
-        vc_free(*body);
-        *body = NULL;
-        *len = 0;
-        return VC_E_PROTOCOL;
-    }
-    return VC_OK;
-}
-
-/* Handles one parsed {"request": ...} node arriving on channel 'ws'
- * (control or rendezvous). */
-static void handle_request(relay_ctx *rc, vc_ws *ws, const vc_json *req_node,
-                           bool on_control)
-{
-    const char *id      = vc_json_get_str(req_node, "id", "");
-    const char *method  = vc_json_get_str(req_node, "method", NULL);
-    const char *target  = vc_json_get_str(req_node, "requestTarget", "/");
-    const char *address = vc_json_get_str(req_node, "address", NULL);
-    bool has_body       = vc_json_get_bool(req_node, "body", false);
-
-    /* Rendezvous-only offer: no method on the control message; the
-     * full request is delivered on the rendezvous connection. */
-    if (on_control && !method) {
-        if (!address) {
-            emit(rc, "REQUEST_ERROR", 0, "request without method or address");
-            return;
+        std::span<const std::uint8_t> as_bytes(std::string_view s)
+        {
+            return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(s.data()),
+                                                 s.size());
         }
-        emit(rc, "RENDEZVOUS", 0, address);
-        vc_ws *rws = rendezvous_connect(rc, address);
-        if (!rws) {
-            emit(rc, "RENDEZVOUS_FAILED", 0, address);
-            return;
-        }
-        /* Expect the request message on the rendezvous channel */
-        vc_ws_msg_type type;
-        uint8_t *payload = NULL;
-        size_t plen = 0;
-        int rcv = vc_ws_recv_msg(rws, &type, &payload, &plen,
-                                 VC_RELAY_BODY_TIMEOUT);
-        if (rcv == VC_OK && type == VC_WS_TEXT) {
-            vc_json *root = vc_json_parse_len((const char *)payload, plen);
-            vc_json *inner = root ? vc_json_obj_get_ci(root, "request") : NULL;
-            if (inner)
-                handle_request(rc, rws, inner, false);
-            vc_json_free(root);
-        }
-        vc_free(payload);
-        vc_ws_send_close(rws, 1000);
-        vc_ws_close(rws);
-        return;
-    }
 
-    /* Body (if any) follows as a binary message on the same channel. */
-    uint8_t *body = NULL;
-    size_t body_len = 0;
-    if (read_body(ws, has_body, &body, &body_len) != VC_OK) {
-        emit(rc, "REQUEST_ERROR", 0, "failed reading request body");
-        return;
-    }
-
-    vc_relay_request req;
-    memset(&req, 0, sizeof req);
-    req.id = id;
-    req.method = method ? method : "";
-    req.target = target;
-    req.body = body;
-    req.body_len = body_len;
-
-    char *headers_json = NULL;
-    vc_json *hdrs = vc_json_obj_get_ci(req_node, "requestHeaders");
-    if (hdrs) headers_json = vc_json_write(hdrs);
-    req.headers_json = headers_json;
-
-    vc_relay_response resp;
-    response_defaults(&resp);
-    if (rc->cb && rc->cb->on_request) {
-        if (rc->cb->on_request(rc->cb->user, &req, &resp) != VC_OK)
-            response_defaults(&resp);
-    } else {
-        resp.status_code = 501;
-        snprintf(resp.status_desc, sizeof resp.status_desc, "Not Implemented");
-    }
-    vc_free(headers_json);
-    vc_free(body);
-
-    /* Send the response: control channel for small bodies, rendezvous
-     * for big ones (the control channel caps messages at 64 KB). */
-    int src;
-    if (on_control && resp.body_len > VC_RELAY_CTRL_BODY_MAX && address) {
-        vc_ws *rws = rendezvous_connect(rc, address);
-        if (rws) {
-            src = send_response_over(rws, id, &resp);
-            vc_ws_send_close(rws, 1000);
-            vc_ws_close(rws);
-        } else {
-            /* fall back to control channel; relay may reject it */
-            src = send_response_over(ws, id, &resp);
-        }
-    } else {
-        src = send_response_over(ws, id, &resp);
-    }
-    if (src != VC_OK)
-        emit(rc, "RESPONSE_ERROR", src, "failed to send response");
-    else
-        emit(rc, "RESPONSE_SENT", resp.status_code, req.target);
-
-    vc_free(resp.body);
-}
-
-static void handle_control_message(relay_ctx *rc, const uint8_t *payload,
-                                   size_t len)
-{
-    vc_json *root = vc_json_parse_len((const char *)payload, len);
-    if (!root) {
-        emit(rc, "PROTOCOL", 0, "unparsable control message");
-        return;
-    }
-    vc_json *req = vc_json_obj_get_ci(root, "request");
-    if (req) {
-        handle_request(rc, rc->ctrl, req, true);
-        vc_json_free(root);
-        return;
-    }
-    if (vc_json_obj_get_ci(root, "accept")) {
-        emit(rc, "ACCEPT_IGNORED", 0,
-             "WebSocket accept offers are not supported by this listener");
-        vc_json_free(root);
-        return;
-    }
-    /* token renew confirmations etc. are informational */
-    char *text = vc_json_write(root);
-    emit(rc, "CONTROL", 0, text ? text : "");
-    vc_free(text);
-    vc_json_free(root);
-}
-
-/* ---------------------------------------------------------------- */
-/* Main loop                                                         */
-/* ---------------------------------------------------------------- */
-
-int vc_relay_listen(const vc_relay_config *cfg,
-                    const vc_relay_callbacks *cb,
-                    volatile bool *stop)
-{
-    if (!cfg || !cfg->namespace_host[0] || !cfg->hybrid_connection[0])
-        return VC_E_INVALID_ARG;
-
-    vc_sock_global_init();
-
-    relay_ctx rc;
-    memset(&rc, 0, sizeof rc);
-    rc.cfg = cfg;
-    rc.cb = cb;
-    rc.ttl = cfg->token_ttl_seconds ? cfg->token_ttl_seconds : 3600;
-
-    unsigned backoff_ms = 1000;
-
-    while (!*stop) {
-        emit(&rc, "CONNECTING", 0, cfg->namespace_host);
-        int crc = ctrl_connect(&rc);
-        if (crc != VC_OK) {
-            emit(&rc, "CONNECT_FAILED", crc, "will retry");
-            for (unsigned waited = 0; waited < backoff_ms && !*stop; waited += 100)
-                vc_os_sleep_ms(100);
-            if (backoff_ms < 60000) backoff_ms *= 2;
-            continue;
-        }
-        backoff_ms = 1000;
-        emit(&rc, "CONNECTED", 200, "listening on control channel");
-
-        while (!*stop) {
-            renew_token_if_due(&rc);
-
-            uint64_t now = vc_os_monotonic_ms();
-            if (now >= rc.next_ping_at) {
-                vc_ws_send_ping(rc.ctrl);
-                rc.next_ping_at = now + VC_RELAY_PING_INTERVAL;
+        class Listener
+        {
+        public:
+            Listener(const RelayConfig& cfg, const RelayCallbacks& cb) : cfg_(cfg), cb_(cb)
+            {
+                ttl_ = cfg_.token_ttl_seconds ? cfg_.token_ttl_seconds : 3600;
             }
 
-            vc_ws_msg_type type;
-            uint8_t *payload = NULL;
-            size_t len = 0;
-            int rrc = vc_ws_recv_msg(rc.ctrl, &type, &payload, &len,
-                                     VC_RELAY_RECV_TICK_MS);
-            if (rrc == VC_E_TIMEOUT)
-                continue;
-            if (rrc == VC_OK) {
-                if (type == VC_WS_TEXT)
-                    handle_control_message(&rc, payload, len);
-                vc_free(payload);
-                continue;
+            Status run(const std::function<bool()>& stop);
+
+        private:
+            void emit(std::string_view event, int code, std::string_view desc)
+            {
+                if (cb_.on_event) cb_.on_event(event, code, desc);
             }
-            /* closed or error -> reconnect */
-            vc_free(payload);
-            emit(&rc, "DISCONNECTED", rrc, "control channel lost");
-            break;
+
+            std::string make_token()
+            {
+                return sas_token(cfg_.namespace_host, cfg_.hybrid_connection,
+                                 cfg_.key_name, cfg_.key, ttl_);
+            }
+
+            Status ctrl_connect();
+            void renew_token_if_due();
+
+            Json build_response_msg(std::string_view request_id, const RelayResponse& resp,
+                                    bool has_body);
+            Status send_response_over(WebSocket& ws, std::string_view request_id,
+                                      const RelayResponse& resp);
+            std::optional<WebSocket> rendezvous_connect(const std::string& address);
+            Result<Bytes> read_body(WebSocket& ws, bool expected);
+            void handle_request(WebSocket& ws, const Json& req_node, bool on_control);
+            void handle_control_message(std::span<const std::uint8_t> payload);
+
+            const RelayConfig& cfg_;
+            const RelayCallbacks& cb_;
+            std::optional<WebSocket> ctrl_;
+            unsigned ttl_;
+            std::uint64_t token_renew_at_ = 0;
+            std::uint64_t next_ping_at_ = 0;
+        };
+
+        Status Listener::ctrl_connect()
+        {
+            std::string token = make_token();
+            if (token.empty()) return std::unexpected(Error::Fail);
+
+            std::string path = "/$hc/" + cfg_.hybrid_connection +
+                "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
+
+            Result<WebSocket> ws = WebSocket::connect(cfg_.namespace_host, 443, path, "",
+                                                      kConnectTimeout);
+            if (!ws) return std::unexpected(Error::Io);
+            ctrl_ = std::move(*ws);
+
+            std::uint64_t now = os::monotonic_ms();
+            token_renew_at_ = now + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
+            next_ping_at_ = now + kPingInterval;
+            return {};
         }
 
-        if (rc.ctrl) {
-            if (*stop) vc_ws_send_close(rc.ctrl, 1000);
-            vc_ws_close(rc.ctrl);
-            rc.ctrl = NULL;
+        void Listener::renew_token_if_due()
+        {
+            if (os::monotonic_ms() < token_renew_at_) return;
+            std::string token = make_token();
+            if (token.empty()) return;
+
+            Json root = Json::object();
+            root.set("renewToken", Json::object().set("token", Json::string(token)));
+            std::string msg = root.dump();
+
+            if (ctrl_->send(WebSocket::MsgType::Text, as_bytes(msg)))
+            {
+                token_renew_at_ = os::monotonic_ms() + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
+                emit("TOKEN_RENEWED", 0, "SAS token renewed");
+            }
         }
+
+        Json Listener::build_response_msg(std::string_view request_id, const RelayResponse& resp,
+                                          bool has_body)
+        {
+            Json r = Json::object();
+            r.set("requestId", Json::string(std::string(request_id)));
+            r.set("statusCode", Json::number(resp.status_code));
+            if (!resp.status_desc.empty())
+                r.set("statusDescription", Json::string(resp.status_desc));
+            Json hdrs = Json::object();
+            hdrs.set("Content-Type",
+                     Json::string(resp.content_type.empty() ? "application/json" : resp.content_type));
+            r.set("responseHeaders", std::move(hdrs));
+            r.set("body", Json::boolean(has_body));
+
+            Json root = Json::object();
+            root.set("response", std::move(r));
+            return root;
+        }
+
+        Status Listener::send_response_over(WebSocket& ws, std::string_view request_id,
+                                            const RelayResponse& resp)
+        {
+            bool has_body = !resp.body.empty();
+            std::string text = build_response_msg(request_id, resp, has_body).dump();
+
+            Status rc = ws.send(WebSocket::MsgType::Text, as_bytes(text));
+            if (!rc) return rc;
+            if (has_body)
+                rc = ws.send(WebSocket::MsgType::Binary, resp.body);
+            return rc;
+        }
+
+        std::optional<WebSocket> Listener::rendezvous_connect(const std::string& address)
+        {
+            Result<Url> u = url_parse(address);
+            if (!u) return std::nullopt;
+
+            std::string path = u->path;
+            if (!u->query.empty())
+            {
+                path += '?';
+                path += u->query;
+            }
+            /* append a token unless the address already carries one */
+            if (u->query.empty() || u->query.find("sb-hc-token=") == std::string::npos)
+            {
+                std::string token = make_token();
+                if (!token.empty())
+                {
+                    path += (u->query.empty() ? '?' : '&');
+                    path += "sb-hc-token=";
+                    path += url_encode(token);
+                }
+            }
+            Result<WebSocket> ws = WebSocket::connect(u->host, u->port, path, "", kConnectTimeout);
+            if (!ws) return std::nullopt;
+            return std::move(*ws);
+        }
+
+        Result<Bytes> Listener::read_body(WebSocket& ws, bool expected)
+        {
+            if (!expected) return Bytes{};
+            Result<WebSocket::Message> m = ws.recv(kBodyTimeout);
+            if (!m) return std::unexpected(m.error());
+            if (m->type != WebSocket::MsgType::Binary) return std::unexpected(Error::Protocol);
+            return std::move(m->payload);
+        }
+
+        void Listener::handle_request(WebSocket& ws, const Json& req_node, bool on_control)
+        {
+            std::string_view id = req_node.get_str("id", "");
+            const Json* method_node = req_node.find_ci("method");
+            bool has_method = method_node && method_node->is_string();
+            std::string_view method = has_method ? method_node->as_string() : "";
+            std::string_view target = req_node.get_str("requestTarget", "/");
+            const Json* addr_node = req_node.find_ci("address");
+            bool has_address = addr_node && addr_node->is_string();
+            bool has_body = req_node.get_bool("body", false);
+
+            /* Rendezvous-only offer: no method on the control message; the full
+     * request is delivered on the rendezvous connection. */
+            if (on_control && !has_method)
+            {
+                if (!has_address)
+                {
+                    emit("REQUEST_ERROR", 0, "request without method or address");
+                    return;
+                }
+                std::string address(addr_node->as_string());
+                emit("RENDEZVOUS", 0, address);
+                std::optional<WebSocket> rws = rendezvous_connect(address);
+                if (!rws)
+                {
+                    emit("RENDEZVOUS_FAILED", 0, address);
+                    return;
+                }
+
+                Result<WebSocket::Message> m = rws->recv(kBodyTimeout);
+                if (m && m->type == WebSocket::MsgType::Text)
+                {
+                    Result<Json> root = Json::parse(as_view(m->payload));
+                    if (root)
+                    {
+                        const Json* inner = root->find_ci("request");
+                        if (inner) handle_request(*rws, *inner, false);
+                    }
+                }
+                rws->send_close(1000);
+                return;
+            }
+
+            /* Body (if any) follows as a binary message on the same channel. */
+            Result<Bytes> body = read_body(ws, has_body);
+            if (!body)
+            {
+                emit("REQUEST_ERROR", 0, "failed reading request body");
+                return;
+            }
+
+            std::string headers_json;
+            if (const Json* hdrs = req_node.find_ci("requestHeaders")) headers_json = hdrs->dump();
+
+            RelayRequest req;
+            req.id = id;
+            req.method = method;
+            req.target = target;
+            req.headers_json = headers_json;
+            req.body = *body;
+
+            RelayResponse resp;
+            if (cb_.on_request)
+            {
+                if (!cb_.on_request(req, resp)) resp = RelayResponse{};
+            }
+            else
+            {
+                resp.status_code = 501;
+                resp.status_desc = "Not Implemented";
+            }
+
+            /* Send the response: control channel for small bodies, rendezvous for big
+     * ones (the control channel caps messages at 64 KB). */
+            Status src;
+            std::string address = has_address ? std::string(addr_node->as_string()) : std::string();
+            if (on_control && resp.body.size() > kCtrlBodyMax && has_address)
+            {
+                std::optional<WebSocket> rws = rendezvous_connect(address);
+                if (rws)
+                {
+                    src = send_response_over(*rws, id, resp);
+                    rws->send_close(1000);
+                }
+                else
+                {
+                    src = send_response_over(ws, id, resp);
+                }
+            }
+            else
+            {
+                src = send_response_over(ws, id, resp);
+            }
+            if (!src)
+                emit("RESPONSE_ERROR", static_cast<int>(src.error()), "failed to send response");
+            else
+                emit("RESPONSE_SENT", resp.status_code, target);
+        }
+
+        void Listener::handle_control_message(std::span<const std::uint8_t> payload)
+        {
+            Result<Json> root = Json::parse(as_view(payload));
+            if (!root)
+            {
+                emit("PROTOCOL", 0, "unparsable control message");
+                return;
+            }
+
+            if (const Json* req = root->find_ci("request"))
+            {
+                handle_request(*ctrl_, *req, true);
+                return;
+            }
+            if (root->find_ci("accept"))
+            {
+                emit("ACCEPT_IGNORED", 0,
+                     "WebSocket accept offers are not supported by this listener");
+                return;
+            }
+            /* token renew confirmations etc. are informational */
+            emit("CONTROL", 0, root->dump());
+        }
+
+        Status Listener::run(const std::function<bool()>& stop)
+        {
+            unsigned backoff_ms = 1000;
+
+            while (!stop())
+            {
+                emit("CONNECTING", 0, cfg_.namespace_host);
+                if (!ctrl_connect())
+                {
+                    emit("CONNECT_FAILED", static_cast<int>(Error::Io), "will retry");
+                    for (unsigned waited = 0; waited < backoff_ms && !stop(); waited += 100)
+                        os::sleep_ms(100);
+                    if (backoff_ms < 60000) backoff_ms *= 2;
+                    continue;
+                }
+                backoff_ms = 1000;
+                emit("CONNECTED", 200, "listening on control channel");
+
+                while (!stop())
+                {
+                    renew_token_if_due();
+
+                    std::uint64_t now = os::monotonic_ms();
+                    if (now >= next_ping_at_)
+                    {
+                        ctrl_->send_ping();
+                        next_ping_at_ = now + kPingInterval;
+                    }
+
+                    Result<WebSocket::Message> m = ctrl_->recv(kRecvTickMs);
+                    if (!m)
+                    {
+                        if (m.error() == Error::Timeout) continue;
+                        emit("DISCONNECTED", static_cast<int>(m.error()), "control channel lost");
+                        break;
+                    }
+                    if (m->type == WebSocket::MsgType::Close)
+                    {
+                        emit("DISCONNECTED", static_cast<int>(Error::Closed), "control channel lost");
+                        break;
+                    }
+                    if (m->type == WebSocket::MsgType::Text)
+                        handle_control_message(m->payload);
+                }
+
+                if (ctrl_)
+                {
+                    if (stop()) ctrl_->send_close(1000);
+                    ctrl_.reset();
+                }
+            }
+            emit("STOPPED", 0, "listener stopped");
+            return {};
+        }
+    } // namespace
+
+    Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
+                        const std::function<bool()>& stop_requested)
+    {
+        if (cfg.namespace_host.empty() || cfg.hybrid_connection.empty())
+            return std::unexpected(Error::InvalidArg);
+
+        Socket::global_init();
+        Listener listener(cfg, cb);
+        return listener.run(stop_requested);
     }
-    emit(&rc, "STOPPED", 0, "listener stopped");
-    return VC_OK;
-}
+} // namespace vc
+

@@ -1,126 +1,191 @@
 /* TLS client stream over OpenSSL (Linux/macOS). */
 #include "vc/vc_tls.h"
-#include "vc/vc_str.h"
 #include "vc/vc_os.h"
+
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-struct vc_tls {
-    vc_sock *sock;
-    SSL_CTX *ctx;
-    SSL     *ssl;
-    BIO     *rbio;   /* network -> SSL */
-    BIO     *wbio;   /* SSL -> network */
-    bool     closed;
-};
-
-static int flush_wbio(vc_tls *t)
+namespace vc
 {
-    char tmp[8192];
-    int pending;
-    while ((pending = BIO_read(t->wbio, tmp, sizeof tmp)) > 0)
-        if (vc_sock_send(t->sock, tmp, (size_t)pending) < 0) return VC_E_IO;
-    return VC_OK;
-}
+    struct Tls::Impl
+    {
+        Socket sock;
+        SSL_CTX* ctx = nullptr;
+        SSL* ssl = nullptr;
+        BIO* rbio = nullptr; /* network -> SSL */
+        BIO* wbio = nullptr; /* SSL -> network */
+        bool closed = false;
 
-static int pump_in(vc_tls *t, int timeout_ms)
-{
-    char tmp[8192];
-    int n = vc_sock_recv(t->sock, tmp, sizeof tmp, timeout_ms);
-    if (n > 0) { BIO_write(t->rbio, tmp, n); return n; }
-    return n;
-}
-
-vc_tls *vc_tls_connect(vc_sock *sock, const char *hostname, int timeout_ms)
-{
-    vc_tls *t = vc_alloc(sizeof *t);
-    if (!t) { vc_sock_close(sock); return NULL; }
-    memset(t, 0, sizeof *t);
-    t->sock = sock;
-
-    t->ctx = SSL_CTX_new(TLS_client_method());
-    if (!t->ctx) { vc_tls_close(t); return NULL; }
-    SSL_CTX_set_verify(t->ctx, SSL_VERIFY_PEER, NULL);
-    SSL_CTX_set_default_verify_paths(t->ctx);
-    SSL_CTX_set_min_proto_version(t->ctx, TLS1_2_VERSION);
-
-    t->ssl = SSL_new(t->ctx);
-    t->rbio = BIO_new(BIO_s_mem());
-    t->wbio = BIO_new(BIO_s_mem());
-    SSL_set_bio(t->ssl, t->rbio, t->wbio);
-    SSL_set_connect_state(t->ssl);
-    SSL_set_tlsext_host_name(t->ssl, hostname);
-    X509_VERIFY_PARAM_set1_host(SSL_get0_param(t->ssl), hostname, 0);
-
-    uint64_t deadline = vc_os_monotonic_ms() + (uint64_t)timeout_ms;
-    for (;;) {
-        int r = SSL_do_handshake(t->ssl);
-        if (r == 1) break;
-        int err = SSL_get_error(t->ssl, r);
-        if (flush_wbio(t) != VC_OK) { vc_tls_close(t); return NULL; }
-        if (err == SSL_ERROR_WANT_READ) {
-            uint64_t now = vc_os_monotonic_ms();
-            if (now >= deadline) { vc_tls_close(t); return NULL; }
-            int pr = pump_in(t, (int)(deadline - now));
-            if (pr <= 0 && pr != VC_E_TIMEOUT) { vc_tls_close(t); return NULL; }
-        } else if (err != SSL_ERROR_WANT_WRITE) {
-            vc_tls_close(t); return NULL;
+        explicit Impl(Socket s) noexcept : sock(std::move(s))
+        {
         }
-    }
-    flush_wbio(t);
-    return t;
-}
 
-int vc_tls_send(vc_tls *t, const void *data, size_t len)
-{
-    if (!t || t->closed) return VC_E_CLOSED;
-    size_t off = 0;
-    const char *p = data;
-    while (off < len) {
-        int n = SSL_write(t->ssl, p + off, (int)(len - off));
-        if (n <= 0) {
-            int err = SSL_get_error(t->ssl, n);
-            if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
-                if (flush_wbio(t) != VC_OK) return VC_E_IO;
-                continue;
+        ~Impl()
+        {
+            if (ssl)
+            {
+                SSL_shutdown(ssl);
+                SSL_free(ssl);
+            } /* frees the BIOs */
+            if (ctx) SSL_CTX_free(ctx);
+        }
+
+        /* Drain queued outbound bytes to the socket. */
+        Status flush_wbio()
+        {
+            char tmp[8192];
+            int pending;
+            while ((pending = BIO_read(wbio, tmp, sizeof tmp)) > 0)
+            {
+                auto r = sock.send(std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(tmp),
+                    static_cast<std::size_t>(pending)));
+                if (!r) return std::unexpected(Error::Io);
             }
-            return VC_E_TLS;
+            return {};
         }
-        off += (size_t)n;
-        if (flush_wbio(t) != VC_OK) return VC_E_IO;
-    }
-    return VC_OK;
-}
 
-int vc_tls_recv(vc_tls *t, void *buf, size_t len, int timeout_ms)
-{
-    if (!t) return VC_E_INVALID_ARG;
-    if (t->closed) return 0;
-    uint64_t deadline = vc_os_monotonic_ms() + (uint64_t)(timeout_ms < 0 ? 0 : timeout_ms);
-    for (;;) {
-        int n = SSL_read(t->ssl, buf, (int)len);
-        if (n > 0) return n;
-        int err = SSL_get_error(t->ssl, n);
-        if (err == SSL_ERROR_ZERO_RETURN) { t->closed = true; return 0; }
-        if (err == SSL_ERROR_WANT_READ) {
-            uint64_t now = vc_os_monotonic_ms();
-            int wait = timeout_ms < 0 ? 60000 : (now >= deadline ? 0 : (int)(deadline - now));
-            if (timeout_ms >= 0 && wait == 0) return VC_E_TIMEOUT;
-            int pr = pump_in(t, wait);
-            if (pr == VC_E_TIMEOUT) { if (timeout_ms < 0) continue; return VC_E_TIMEOUT; }
-            if (pr == 0) { t->closed = true; return 0; }
-            if (pr < 0) return pr;
-        } else {
-            return VC_E_TLS;
+        /* Pull inbound bytes from the socket into the read BIO. Returns bytes
+     * read (>0), 0 on close, or an error. */
+        Result<std::size_t> pump_in(int timeout_ms)
+        {
+            char tmp[8192];
+            auto r = sock.recv(std::span<std::uint8_t>(
+                                   reinterpret_cast<std::uint8_t*>(tmp), sizeof tmp), timeout_ms);
+            if (r && *r > 0)
+            {
+                BIO_write(rbio, tmp, static_cast<int>(*r));
+            }
+            return r;
+        }
+    };
+
+    Tls::Tls() noexcept = default;
+
+    Tls::Tls(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
+    {
+    }
+
+    Tls::~Tls() = default;
+    Tls::Tls(Tls&&) noexcept = default;
+    Tls& Tls::operator=(Tls&&) noexcept = default;
+
+    Result<Tls> Tls::connect(Socket sock, const std::string& hostname, int timeout_ms)
+    {
+        auto impl = std::make_unique<Impl>(std::move(sock));
+
+        impl->ctx = SSL_CTX_new(TLS_client_method());
+        if (!impl->ctx) return std::unexpected(Error::Tls);
+        SSL_CTX_set_verify(impl->ctx, SSL_VERIFY_PEER, nullptr);
+        SSL_CTX_set_default_verify_paths(impl->ctx);
+        SSL_CTX_set_min_proto_version(impl->ctx, TLS1_2_VERSION);
+
+        impl->ssl = SSL_new(impl->ctx);
+        impl->rbio = BIO_new(BIO_s_mem());
+        impl->wbio = BIO_new(BIO_s_mem());
+        SSL_set_bio(impl->ssl, impl->rbio, impl->wbio);
+        SSL_set_connect_state(impl->ssl);
+        SSL_set_tlsext_host_name(impl->ssl, hostname.c_str());
+        X509_VERIFY_PARAM_set1_host(SSL_get0_param(impl->ssl), hostname.c_str(), 0);
+
+        std::uint64_t deadline = os::monotonic_ms() + static_cast<std::uint64_t>(timeout_ms);
+        for (;;)
+        {
+            int r = SSL_do_handshake(impl->ssl);
+            if (r == 1) break;
+            int err = SSL_get_error(impl->ssl, r);
+            if (!impl->flush_wbio()) return std::unexpected(Error::Io);
+            if (err == SSL_ERROR_WANT_READ)
+            {
+                std::uint64_t now = os::monotonic_ms();
+                if (now >= deadline) return std::unexpected(Error::Timeout);
+                auto pr = impl->pump_in(static_cast<int>(deadline - now));
+                if (!pr)
+                {
+                    if (pr.error() == Error::Timeout) return std::unexpected(Error::Timeout);
+                    return std::unexpected(Error::Tls);
+                }
+                if (*pr == 0) return std::unexpected(Error::Tls); /* closed mid-handshake */
+            }
+            else if (err != SSL_ERROR_WANT_WRITE)
+            {
+                return std::unexpected(Error::Tls);
+            }
+        }
+        if (!impl->flush_wbio()) return std::unexpected(Error::Io);
+        return Tls(std::move(impl));
+    }
+
+    Status Tls::send(std::span<const std::uint8_t> data)
+    {
+        if (!impl_ || impl_->closed) return std::unexpected(Error::Closed);
+        std::size_t off = 0;
+        const char* p = reinterpret_cast<const char*>(data.data());
+        while (off < data.size())
+        {
+            int n = SSL_write(impl_->ssl, p + off, static_cast<int>(data.size() - off));
+            if (n <= 0)
+            {
+                int err = SSL_get_error(impl_->ssl, n);
+                if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ)
+                {
+                    if (!impl_->flush_wbio()) return std::unexpected(Error::Io);
+                    continue;
+                }
+                return std::unexpected(Error::Tls);
+            }
+            off += static_cast<std::size_t>(n);
+            if (!impl_->flush_wbio()) return std::unexpected(Error::Io);
+        }
+        return {};
+    }
+
+    Result<std::size_t> Tls::recv(std::span<std::uint8_t> buf, int timeout_ms)
+    {
+        if (!impl_) return std::unexpected(Error::InvalidArg);
+        if (impl_->closed) return std::size_t{0};
+        std::uint64_t deadline =
+            os::monotonic_ms() + static_cast<std::uint64_t>(timeout_ms < 0 ? 0 : timeout_ms);
+        for (;;)
+        {
+            int n = SSL_read(impl_->ssl, buf.data(), static_cast<int>(buf.size()));
+            if (n > 0) return static_cast<std::size_t>(n);
+            int err = SSL_get_error(impl_->ssl, n);
+            if (err == SSL_ERROR_ZERO_RETURN)
+            {
+                impl_->closed = true;
+                return std::size_t{0};
+            }
+            if (err == SSL_ERROR_WANT_READ)
+            {
+                std::uint64_t now = os::monotonic_ms();
+                int wait = timeout_ms < 0
+                               ? 60000
+                               : (now >= deadline ? 0 : static_cast<int>(deadline - now));
+                if (timeout_ms >= 0 && wait == 0) return std::unexpected(Error::Timeout);
+                auto pr = impl_->pump_in(wait);
+                if (!pr)
+                {
+                    if (pr.error() == Error::Timeout)
+                    {
+                        if (timeout_ms < 0) continue;
+                        return std::unexpected(Error::Timeout);
+                    }
+                    return std::unexpected(pr.error());
+                }
+                if (*pr == 0)
+                {
+                    impl_->closed = true;
+                    return std::size_t{0};
+                }
+            }
+            else
+            {
+                return std::unexpected(Error::Tls);
+            }
         }
     }
-}
 
-void vc_tls_close(vc_tls *t)
-{
-    if (!t) return;
-    if (t->ssl) { SSL_shutdown(t->ssl); SSL_free(t->ssl); } /* frees BIOs */
-    if (t->ctx) SSL_CTX_free(t->ctx);
-    if (t->sock) vc_sock_close(t->sock);
-    vc_free(t);
-}
+    void Tls::close() { impl_.reset(); }
+} // namespace vc
+

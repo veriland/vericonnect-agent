@@ -1,7 +1,7 @@
 /*
- * vc_ws.h - RFC 6455 WebSocket client over vc_tls.
- * Messages are reassembled from fragments; ping/pong is handled
- * internally by vc_ws_recv_msg.
+ * vc_ws.h - RFC 6455 WebSocket client over vc::Tls.
+ * Messages are reassembled from fragments; ping/pong is handled internally
+ * by recv().
  */
 #ifndef VC_WS_H
 #define VC_WS_H
@@ -10,45 +10,67 @@
 #include "vc_tls.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_ws vc_ws;
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
 
-typedef enum vc_ws_msg_type {
-    VC_WS_TEXT   = 1,
-    VC_WS_BINARY = 2,
-    VC_WS_CLOSE  = 8
-} vc_ws_msg_type;
+namespace vc
+{
+    class WebSocket
+    {
+    public:
+        enum class MsgType { Text = 1, Binary = 2, Close = 8 };
 
-/*
- * Connect + upgrade. path_and_query e.g. "/$hc/name?sb-hc-action=listen&...".
- * extra_headers: optional "Header: value\r\n" lines, may be NULL.
- */
-vc_ws *vc_ws_connect(const char *host, int port,
-                     const char *path_and_query,
-                     const char *extra_headers,
-                     int timeout_ms);
+        struct Message
+        {
+            MsgType type;
+            Bytes payload;
+        };
 
-/* Send one complete message (auto-fragments large payloads). */
-int vc_ws_send(vc_ws *ws, vc_ws_msg_type type, const void *data, size_t len);
-int vc_ws_send_ping(vc_ws *ws);
-int vc_ws_send_close(vc_ws *ws, uint16_t code);
+        WebSocket() noexcept = default;
+        WebSocket(WebSocket&&) noexcept = default;
+        WebSocket& operator=(WebSocket&&) noexcept = default;
+        WebSocket(const WebSocket&) = delete;
+        WebSocket& operator=(const WebSocket&) = delete;
 
-/*
- * Receive the next data message. Returns VC_OK and sets *type,
- * *payload (vc_free), *len. Control frames (ping/pong) are handled
- * transparently. Returns VC_E_TIMEOUT if no complete message within
- * timeout_ms, VC_E_CLOSED when the peer closed, VC_E_* on error.
- * On VC_E_CLOSED *type is VC_WS_CLOSE and payload may hold the reason.
- */
-int vc_ws_recv_msg(vc_ws *ws, vc_ws_msg_type *type,
-                   uint8_t **payload, size_t *len, int timeout_ms);
+        /* Connect + upgrade. path_and_query e.g. "/$hc/name?sb-hc-action=listen".
+     * extra_headers: optional "Header: value\r\n" lines. */
+        static Result<WebSocket> connect(const std::string& host, int port,
+                                         const std::string& path_and_query,
+                                         std::string_view extra_headers,
+                                         int timeout_ms);
 
-void vc_ws_close(vc_ws *ws);
+        /* Send one complete message (auto-fragments large payloads). */
+        Status send(MsgType type, std::span<const std::uint8_t> data);
+        Status send_ping();
+        Status send_close(std::uint16_t code);
 
-#ifdef __cplusplus
-}
-#endif
+        /*
+     * Receive the next data message. Control frames (ping/pong) are handled
+     * transparently. A peer close yields a Message with type == Close (and the
+     * connection is marked closed); Error::Timeout if none arrived in time.
+     */
+        Result<Message> recv(int timeout_ms);
+
+        void close();
+        bool valid() const noexcept { return tls_.valid(); }
+
+    private:
+        explicit WebSocket(Tls tls) noexcept : tls_(std::move(tls))
+        {
+        }
+
+        Result<std::size_t> read_more(int timeout_ms);
+        Status send_frame(std::uint8_t opcode, bool fin, std::span<const std::uint8_t> data);
+
+        Tls tls_;
+        Bytes in_; /* raw undecoded incoming bytes */
+        bool closed_ = false;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

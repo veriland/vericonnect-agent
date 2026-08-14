@@ -11,64 +11,71 @@
  *     "Adapter": "FileSystem",
  *     "Command": "ListFolder" | "CreateFolder" | "CreateFile" |
  *                "ReadFile" | "DeleteFile" | "MoveFile",
- *     "Parameters": { "TargetFolder": "...", "FileName": "...",
- *                     "FileContent": "...", "Encoding": "utf-8",
- *                     "OverwriteIfExists": true, ... }
+ *     "Parameters": { ... }
  *   }
  */
 #include "vc/vc_adapter.h"
 #include "vc/vc_json.h"
-#include "vc/vc_str.h"
 #include "fs_commands.h"
-#include <stdio.h>
 
-static char *make_error(int code, const char *desc)
+#include <cstring>
+#include <format>
+#include <string>
+
+namespace {
+
+using vc::Json;
+
+/* Copy a std::string into a vc_alloc'd C buffer for the ABI boundary. */
+char *to_abi(const std::string &s)
 {
-    vc_json *o = vc_json_new_object();
-    vc_json_obj_set_num(o, "StatusCode", code);
-    vc_json_obj_set_str(o, "StatusDescription", desc);
-    char *s = vc_json_write(o);
-    vc_json_free(o);
-    return s ? s : vc_strdup("{\"StatusCode\":500,\"StatusDescription\":\"error\"}");
+    char *out = static_cast<char *>(vc_alloc(s.size() + 1));
+    if (out) std::memcpy(out, s.c_str(), s.size() + 1);
+    return out;
 }
+
+std::string make_error(int code, std::string_view desc)
+{
+    Json o = Json::object();
+    o.set("StatusCode", Json::number(code));
+    o.set("StatusDescription", Json::string(std::string(desc)));
+    return o.dump();
+}
+
+bool iequals(std::string_view a, std::string_view b) noexcept
+{
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); i++)
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i])))
+            return false;
+    return true;
+}
+
+std::string run(std::string_view request_json)
+{
+    vc::Result<Json> root = Json::parse(request_json);
+    if (!root) return make_error(400, "Invalid JSON format.");
+
+    std::string_view cmd = root->get_str("Command", "");
+    if (cmd.empty()) return make_error(400, "\"Command\" parameter is required.");
+
+    if (iequals(cmd, "ListFolder"))   return fs_cmd::list_folder(*root);
+    if (iequals(cmd, "CreateFolder")) return fs_cmd::create_folder(*root);
+    if (iequals(cmd, "CreateFile"))   return fs_cmd::create_file(*root);
+    if (iequals(cmd, "ReadFile"))     return fs_cmd::read_file(*root);
+    if (iequals(cmd, "DeleteFile"))   return fs_cmd::delete_file(*root);
+    if (iequals(cmd, "MoveFile") || iequals(cmd, "Move")) return fs_cmd::move_file(*root);
+
+    return make_error(404, std::format("Command \"{}\" not found.", cmd));
+}
+
+} // namespace
 
 VC_ADAPTER_EXPORT char *RunAdapterCommand(const char *request_json)
 {
-    if (!request_json)
-        return make_error(400, "Empty request");
-
-    vc_json *root = vc_json_parse(request_json);
-    if (!root)
-        return make_error(400, "Invalid JSON format.");
-
-    const char *cmd = vc_json_get_str(root, "Command", NULL);
-    if (!cmd) {
-        vc_json_free(root);
-        return make_error(400, "\"Command\" parameter is required.");
-    }
-
-    char *result = NULL;
-    if (!vc_stricmp(cmd, "ListFolder"))
-        result = fs_cmd_list_folder(root);
-    else if (!vc_stricmp(cmd, "CreateFolder"))
-        result = fs_cmd_create_folder(root);
-    else if (!vc_stricmp(cmd, "CreateFile"))
-        result = fs_cmd_create_file(root);
-    else if (!vc_stricmp(cmd, "ReadFile"))
-        result = fs_cmd_read_file(root);
-    else if (!vc_stricmp(cmd, "DeleteFile"))
-        result = fs_cmd_delete_file(root);
-    else if (!vc_stricmp(cmd, "MoveFile") || !vc_stricmp(cmd, "Move"))
-        result = fs_cmd_move_file(root);
-    else {
-        char msg[256];
-        snprintf(msg, sizeof msg, "Command \"%s\" not found.", cmd);
-        result = make_error(404, msg);
-    }
-
-    vc_json_free(root);
-    if (!result) result = make_error(500, "Adapter produced no result");
-    return result;
+    if (!request_json) return to_abi(make_error(400, "Empty request"));
+    return to_abi(run(request_json));
 }
 
 VC_ADAPTER_EXPORT void FreeAdapterString(char *p)

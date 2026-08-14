@@ -1,8 +1,11 @@
 /*
  * vc_tls.h - TLS client stream abstraction.
  *
- * Windows: SChannel (platform/win/vc_tls_schannel.c) - no extra deps.
- * POSIX:   OpenSSL   (platform/posix/vc_tls_openssl.c).
+ * Windows: SChannel (platform/win/vc_tls_schannel.cpp) - no extra deps.
+ * POSIX:   OpenSSL   (platform/posix/vc_tls_openssl.cpp).
+ *
+ * The platform-specific state is hidden behind a PIMPL so this header stays
+ * free of OpenSSL / SChannel types.
  */
 #ifndef VC_TLS_H
 #define VC_TLS_H
@@ -11,27 +14,44 @@
 #include "vc_sock.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_tls vc_tls;
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
 
-/* Performs the TLS handshake over an existing connected socket.
- * hostname is used for SNI + certificate validation.
- * On success the vc_tls owns the socket. NULL on failure. */
-vc_tls *vc_tls_connect(vc_sock *sock, const char *hostname, int timeout_ms);
+namespace vc
+{
+    class Tls
+    {
+    public:
+        Tls() noexcept;
+        ~Tls();
+        Tls(Tls&& other) noexcept;
+        Tls& operator=(Tls&& other) noexcept;
+        Tls(const Tls&) = delete;
+        Tls& operator=(const Tls&) = delete;
 
-/* Sends all len bytes. Returns VC_OK or VC_E_*. */
-int vc_tls_send(vc_tls *t, const void *data, size_t len);
+        /* Perform the TLS handshake over an already-connected socket; hostname is
+     * used for SNI and certificate validation. The Tls takes ownership of the
+     * socket (it is closed when the Tls is destroyed, or by connect() on
+     * failure). */
+        static Result<Tls> connect(Socket sock, const std::string& hostname, int timeout_ms);
 
-/* Returns decrypted bytes read (>0), 0 on orderly close,
- * VC_E_TIMEOUT, or VC_E_* on error. */
-int vc_tls_recv(vc_tls *t, void *buf, size_t len, int timeout_ms);
+        Status send(std::span<const std::uint8_t> data);
+        /* Returns decrypted bytes read (>0), 0 on orderly close, or an error. */
+        Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
-void vc_tls_close(vc_tls *t);   /* also closes the underlying socket */
+        void close();
+        bool valid() const noexcept { return impl_ != nullptr; }
 
-#ifdef __cplusplus
-}
-#endif
+    private:
+        struct Impl;
+        explicit Tls(std::unique_ptr<Impl> impl) noexcept;
+        std::unique_ptr<Impl> impl_;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

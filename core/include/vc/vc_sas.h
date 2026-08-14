@@ -12,21 +12,23 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-/*
+#include <string>
+#include <string_view>
+
+namespace vc
+{
+    /*
  * namespace_host : e.g. "contoso.servicebus.windows.net"
  * entity_path    : e.g. "myhybridconnection"
- * ttl_seconds    : lifetime from now (e.g. 3600)
- * Returns malloc'd token string (vc_free), NULL on error.
+ * ttl_seconds    : lifetime from now (0 -> 3600).
+ * Returns the token, or an empty string on invalid input.
  */
-char *vc_sas_token(const char *namespace_host, const char *entity_path,
-                   const char *key_name, const char *key,
-                   unsigned ttl_seconds);
+    std::string sas_token(std::string_view namespace_host, std::string_view entity_path,
+                          std::string_view key_name, std::string_view key,
+                          unsigned ttl_seconds);
+} // namespace vc
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* __cplusplus */
 
 #endif

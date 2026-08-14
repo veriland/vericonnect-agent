@@ -1,314 +1,228 @@
 /*
- * FileSystem adapter commands, including ReadFile's "move the file
- * into a COPY subfolder after reading" semantics.
+ * FileSystem adapter commands, including ReadFile's "move the file into a COPY
+ * subfolder after reading" semantics.
  */
 #include "fs_commands.h"
 #include "vc/vc_fs.h"
-#include "vc/vc_str.h"
 #include "vc/vc_base64.h"
-#include <stdio.h>
 
-/* ---------------------------------------------------------------- */
-/* helpers                                                           */
-/* ---------------------------------------------------------------- */
+#include <format>
+#include <optional>
+#include <span>
+#include <string>
 
-static const vc_json *params_of(const vc_json *req)
+namespace fs_cmd {
+
+namespace {
+
+using vc::Json;
+
+const Json *params_of(const Json &req) { return req.find_ci("Parameters"); }
+
+std::string result_json(int code, std::string_view desc, std::optional<Json> data = std::nullopt)
 {
-    return vc_json_obj_get_ci(req, "Parameters");
+    Json o = Json::object();
+    o.set("StatusCode", Json::number(code));
+    o.set("StatusDescription", Json::string(std::string(desc)));
+    if (data) o.set("Data", std::move(*data));
+    return o.dump();
 }
 
-static char *result_json(int code, const char *desc, vc_json *data /*adopted*/)
+/* Resolve TargetFolder + FileName; nullopt if either missing. */
+std::optional<std::string> target_path(const Json *p)
 {
-    vc_json *o = vc_json_new_object();
-    vc_json_obj_set_num(o, "StatusCode", code);
-    vc_json_obj_set_str(o, "StatusDescription", desc);
-    if (data)
-        vc_json_obj_set(o, "Data", data);
-    char *s = vc_json_write(o);
-    vc_json_free(o);
-    return s ? s : vc_strdup("{\"StatusCode\":500}");
+    if (!p) return std::nullopt;
+    std::string_view folder = p->get_str("TargetFolder", "");
+    std::string_view name   = p->get_str("FileName", "");
+    if (folder.empty() || name.empty()) return std::nullopt;
+    return vc::fs::join(folder, name);
 }
 
-static char *simple_result(int code, const char *fmt, ...)
+bool iequals(std::string_view a, std::string_view b) noexcept
 {
-    char msg[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(msg, sizeof msg, fmt, ap);
-    va_end(ap);
-    return result_json(code, msg, NULL);
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); i++)
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i])))
+            return false;
+    return true;
 }
 
-/* Resolves TargetFolder + FileName; returns NULL if either missing. */
-static char *target_path(const vc_json *p)
+std::span<const std::uint8_t> as_bytes(std::string_view s)
 {
-    const char *folder = vc_json_get_str(p, "TargetFolder", NULL);
-    const char *name   = vc_json_get_str(p, "FileName", NULL);
-    if (!folder || !name || !*name) return NULL;
-    return vc_fs_join(folder, name);
+    return std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(s.data()),
+                                         s.size());
 }
 
-/* ---------------------------------------------------------------- */
-/* ListFolder                                                        */
-/* ---------------------------------------------------------------- */
+} // namespace
 
-char *fs_cmd_list_folder(const vc_json *req)
+std::string list_folder(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    const char *folder = vc_json_get_str(p, "TargetFolder", NULL);
-    if (!folder || !*folder)
-        return simple_result(400, "Missing parameters, please check your parameters");
+    const Json *p = params_of(req);
+    std::string folder(p ? p->get_str("TargetFolder", "") : "");
+    if (folder.empty())
+        return result_json(400, "Missing parameters, please check your parameters");
 
-    if (!vc_fs_dir_exists(folder))
-        return simple_result(404, "Folder %s not found", folder);
+    if (!vc::fs::dir_exists(folder))
+        return result_json(404, std::format("Folder {} not found", folder));
 
-    char **names = NULL;
-    size_t count = 0;
-    if (vc_fs_list_files(folder, &names, &count) != VC_OK)
-        return simple_result(404, "No files found in the folder %s", folder);
+    vc::Result<std::vector<std::string>> names = vc::fs::list_files(folder);
+    if (!names || names->empty())
+        return result_json(404, std::format("No files found in the folder {}", folder));
 
-    if (count == 0) {
-        vc_fs_list_free(names, count);
-        return simple_result(404, "No files found in the folder %s", folder);
-    }
+    Json files = Json::array();
+    for (const std::string &n : *names) files.add(Json::string(n));
 
-    vc_json *files = vc_json_new_array();
-    for (size_t i = 0; i < count; i++)
-        vc_json_arr_add(files, vc_json_new_str(names[i]));
-    vc_fs_list_free(names, count);
+    Json data = Json::object();
+    data.set("files", std::move(files));
+    data.set("FileCount", Json::number(static_cast<double>(names->size())));
 
-    vc_json *data = vc_json_new_object();
-    vc_json_obj_set(data, "files", files);
-    vc_json_obj_set_num(data, "FileCount", (double)count);
-
-    char msg[1024];
-    snprintf(msg, sizeof msg, "There are %zu files under the %s folder",
-             count, folder);
-    return result_json(200, msg, data);
+    return result_json(200,
+        std::format("There are {} files under the {} folder", names->size(), folder),
+        std::move(data));
 }
 
-/* ---------------------------------------------------------------- */
-/* CreateFolder                                                      */
-/* ---------------------------------------------------------------- */
-
-char *fs_cmd_create_folder(const vc_json *req)
+std::string create_folder(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    const char *folder = vc_json_get_str(p, "TargetFolder", NULL);
-    if (!folder || !*folder)
-        return simple_result(400, "Missing parameters, please check your parameters");
+    const Json *p = params_of(req);
+    std::string folder(p ? p->get_str("TargetFolder", "") : "");
+    if (folder.empty())
+        return result_json(400, "Missing parameters, please check your parameters");
 
-    if (vc_fs_dir_exists(folder))
-        return simple_result(200, "Folder %s already exists", folder);
+    if (vc::fs::dir_exists(folder))
+        return result_json(200, std::format("Folder {} already exists", folder));
 
     /* create intermediate levels */
-    char *work = vc_strdup(folder);
-    if (!work) return simple_result(500, "Out of memory");
-    for (char *q = work; *q; q++) {
-        if ((*q == '\\' || *q == '/') && q != work) {
-            char saved = *q;
-            *q = 0;
+    for (std::size_t i = 1; i < folder.size(); i++) {
+        if (folder[i] == '\\' || folder[i] == '/') {
+            std::string prefix = folder.substr(0, i);
             /* skip drive roots like "C:" and UNC prefixes */
-            if (strlen(work) > 2 || (work[1] != ':' && work[0] != '\\'))
-                vc_fs_mkdir(work);
-            *q = saved;
+            if (prefix.size() > 2 || (prefix[1] != ':' && prefix[0] != '\\'))
+                vc::fs::mkdir(prefix);
         }
     }
-    int rc = vc_fs_mkdir(work);
-    vc_free(work);
-
-    if (rc != VC_OK)
-        return simple_result(400, "Error creating folder: %s", folder);
-    return simple_result(200, "Folder %s created successfully", folder);
+    if (!vc::fs::mkdir(folder))
+        return result_json(400, std::format("Error creating folder: {}", folder));
+    return result_json(200, std::format("Folder {} created successfully", folder));
 }
 
-/* ---------------------------------------------------------------- */
-/* CreateFile                                                        */
-/* ---------------------------------------------------------------- */
-
-char *fs_cmd_create_file(const vc_json *req)
+std::string create_file(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    char *path = target_path(p);
+    const Json *p = params_of(req);
+    std::optional<std::string> path = target_path(p);
     if (!path)
-        return simple_result(400, "Missing parameters, please check your parameters");
+        return result_json(400, "Missing parameters, please check your parameters");
 
-    bool overwrite = vc_json_get_bool(p, "OverwriteIfExists", false);
-    if (vc_fs_file_exists(path) && !overwrite) {
-        char *r = simple_result(409,
+    bool overwrite = p->get_bool("OverwriteIfExists", false);
+    if (vc::fs::file_exists(*path) && !overwrite)
+        return result_json(409,
             "File already exist and overwrite if exists flag is disabled");
-        vc_free(path);
-        return r;
+
+    std::string_view content = p->get_str("FileContent", "");
+    std::string_view ctype   = p->get_str("FileContentType", "");
+
+    if (iequals(ctype, "base64")) {
+        std::optional<vc::Bytes> bytes = vc::base64_decode(content);
+        if (!bytes)
+            return result_json(400, "FileContent is not valid base64");
+        return vc::fs::write_all(*path, *bytes)
+            ? result_json(200, std::format("Data written successfully to file: {}", *path))
+            : result_json(400, std::format("Error writing to file: {}", *path));
     }
 
-    const char *content  = vc_json_get_str(p, "FileContent", "");
-    const char *encoding = vc_json_get_str(p, "Encoding", "utf-8");
-
-    /* base64 content type lets callers push binary payloads */
-    const char *ctype = vc_json_get_str(p, "FileContentType", NULL);
-    char *result;
-    if (ctype && !vc_stricmp(ctype, "base64")) {
-        size_t blen = 0;
-        uint8_t *bytes = vc_base64_decode(content, &blen);
-        if (!bytes) {
-            result = simple_result(400, "FileContent is not valid base64");
-        } else {
-            int rc = vc_fs_write_all(path, bytes, blen);
-            vc_free(bytes);
-            result = (rc == VC_OK)
-                ? simple_result(200, "Data written successfully to file: %s", path)
-                : simple_result(400, "Error writing to file: %s", path);
-        }
-    } else {
-        /* The JSON string is already UTF-8; write the raw UTF-8 bytes
-         * without a BOM (BACS files rely on BOM-less output). */
-        (void)encoding;
-        int rc = vc_fs_write_all(path, content, strlen(content));
-        result = (rc == VC_OK)
-            ? simple_result(200, "Data written successfully to file: %s", path)
-            : simple_result(400, "Error writing to file: %s", path);
-    }
-    vc_free(path);
-    return result;
+    /* The JSON string is already UTF-8; write the raw bytes without a BOM. */
+    return vc::fs::write_all(*path, as_bytes(content))
+        ? result_json(200, std::format("Data written successfully to file: {}", *path))
+        : result_json(400, std::format("Error writing to file: {}", *path));
 }
 
-/* ---------------------------------------------------------------- */
-/* ReadFile                                                          */
-/* ---------------------------------------------------------------- */
-
-char *fs_cmd_read_file(const vc_json *req)
+std::string read_file(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    const char *folder = vc_json_get_str(p, "TargetFolder", NULL);
-    char *path = target_path(p);
+    const Json *p = params_of(req);
+    std::string folder(p ? p->get_str("TargetFolder", "") : "");
+    std::optional<std::string> path = target_path(p);
     if (!path)
-        return simple_result(400, "Invalid parameters.");
+        return result_json(400, "Invalid parameters.");
 
-    if (!vc_fs_file_exists(path)) {
-        char *r = simple_result(404, "File %s not found.", path);
-        vc_free(path);
-        return r;
-    }
+    if (!vc::fs::file_exists(*path))
+        return result_json(404, std::format("File {} not found.", *path));
 
-    uint8_t *bytes = NULL;
-    size_t len = 0;
-    if (vc_fs_read_all(path, &bytes, &len) != VC_OK) {
-        char *r = simple_result(500, "Error reading file: %s", path);
-        vc_free(path);
-        return r;
-    }
+    vc::Result<vc::Bytes> bytes = vc::fs::read_all(*path);
+    if (!bytes)
+        return result_json(500, std::format("Error reading file: {}", *path));
 
-    char *b64 = vc_base64_encode(bytes, len);
-    vc_free(bytes);
-    if (!b64) {
-        vc_free(path);
-        return simple_result(500, "Out of memory encoding file content");
-    }
+    std::string b64 = vc::base64_encode(*bytes);
 
-    /* Post-read archive: move the file into <TargetFolder>/COPY so a
-     * polled folder drains. */
-    bool overwrite = vc_json_get_bool(p, "OverwriteIfExists", false);
-    const char *name = vc_json_get_str(p, "FileName", "");
-    char *copy_dir = vc_fs_join(folder, "COPY");
-    char *dest = copy_dir ? vc_fs_join(copy_dir, name) : NULL;
+    /* Post-read archive: move the file into <TargetFolder>/COPY so a polled
+     * folder drains. */
+    bool overwrite = p->get_bool("OverwriteIfExists", false);
+    std::string name(p->get_str("FileName", ""));
+    std::string copy_dir = vc::fs::join(folder, "COPY");
+    std::string dest = vc::fs::join(copy_dir, name);
 
     int status = 200;
-    char desc[1024];
-    snprintf(desc, sizeof desc, "File %s read successfully", path);
+    std::string desc = std::format("File {} read successfully", *path);
 
-    if (copy_dir && dest) {
-        if (!vc_fs_dir_exists(copy_dir))
-            vc_fs_mkdir(copy_dir);
-        if (vc_fs_file_exists(dest)) {
-            if (overwrite) {
-                vc_fs_remove_file(dest);
-                vc_fs_move(path, dest);
-            } else {
-                status = 409;
-                snprintf(desc, sizeof desc,
-                         "File %s already exists and overwrite is not allowed.",
-                         dest);
-            }
+    if (!vc::fs::dir_exists(copy_dir)) vc::fs::mkdir(copy_dir);
+    if (vc::fs::file_exists(dest)) {
+        if (overwrite) {
+            vc::fs::remove_file(dest);
+            vc::fs::move(*path, dest);
         } else {
-            vc_fs_move(path, dest);
+            status = 409;
+            desc = std::format("File {} already exists and overwrite is not allowed.", dest);
         }
+    } else {
+        vc::fs::move(*path, dest);
     }
-    vc_free(copy_dir);
-    vc_free(dest);
-    vc_free(path);
 
-    /* Data carries the base64 payload. */
-    vc_json *o = vc_json_new_object();
-    vc_json_obj_set_num(o, "StatusCode", status);
-    vc_json_obj_set_str(o, "StatusDescription", desc);
-    vc_json_obj_set_str(o, "Data", b64);
-    vc_json_obj_set_num(o, "FileSize", (double)len);
-    char *s = vc_json_write(o);
-    vc_json_free(o);
-    vc_free(b64);
-    return s ? s : vc_strdup("{\"StatusCode\":500}");
+    Json o = Json::object();
+    o.set("StatusCode", Json::number(status));
+    o.set("StatusDescription", Json::string(desc));
+    o.set("Data", Json::string(b64));
+    o.set("FileSize", Json::number(static_cast<double>(bytes->size())));
+    return o.dump();
 }
 
-/* ---------------------------------------------------------------- */
-/* DeleteFile                                                        */
-/* ---------------------------------------------------------------- */
-
-char *fs_cmd_delete_file(const vc_json *req)
+std::string delete_file(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    char *path = target_path(p);
+    const Json *p = params_of(req);
+    std::optional<std::string> path = target_path(p);
     if (!path)
-        return simple_result(400, "Missing parameters, please check your parameters");
+        return result_json(400, "Missing parameters, please check your parameters");
 
-    char *result;
-    if (!vc_fs_file_exists(path)) {
-        result = simple_result(404, "File %s not found.", path);
-    } else if (vc_fs_remove_file(path) == VC_OK) {
-        result = simple_result(200, "File %s deleted successfully", path);
-    } else {
-        result = simple_result(400, "Error deleting file: %s", path);
-    }
-    vc_free(path);
-    return result;
+    if (!vc::fs::file_exists(*path))
+        return result_json(404, std::format("File {} not found.", *path));
+    if (vc::fs::remove_file(*path))
+        return result_json(200, std::format("File {} deleted successfully", *path));
+    return result_json(400, std::format("Error deleting file: {}", *path));
 }
 
-/* ---------------------------------------------------------------- */
-/* MoveFile                                                          */
-/* ---------------------------------------------------------------- */
-
-char *fs_cmd_move_file(const vc_json *req)
+std::string move_file(const Json &req)
 {
-    const vc_json *p = params_of(req);
-    char *src = target_path(p);
-    const char *dest_folder = vc_json_get_str(p, "DestinationFolder", NULL);
-    const char *dest_name   = vc_json_get_str(p, "DestinationFileName",
-                              vc_json_get_str(p, "FileName", NULL));
-    if (!src || !dest_folder || !dest_name) {
-        vc_free(src);
-        return simple_result(400,
+    const Json *p = params_of(req);
+    std::optional<std::string> src = target_path(p);
+    std::string_view dest_folder = p ? p->get_str("DestinationFolder", "") : "";
+    std::string_view dest_name = p ? p->get_str("DestinationFileName",
+                                                p->get_str("FileName", "")) : "";
+    if (!src || dest_folder.empty() || dest_name.empty())
+        return result_json(400,
             "Missing parameters: TargetFolder, FileName and DestinationFolder are required");
-    }
 
-    char *dest = vc_fs_join(dest_folder, dest_name);
-    if (!dest) { vc_free(src); return simple_result(500, "Out of memory"); }
+    std::string dest = vc::fs::join(dest_folder, dest_name);
+    bool overwrite = p->get_bool("OverwriteIfExists", false);
 
-    char *result;
-    bool overwrite = vc_json_get_bool(p, "OverwriteIfExists", false);
-    if (!vc_fs_file_exists(src)) {
-        result = simple_result(404, "File %s not found.", src);
-    } else if (vc_fs_file_exists(dest) && !overwrite) {
-        result = simple_result(409,
-            "File %s already exists and overwrite is not allowed.", dest);
-    } else {
-        if (!vc_fs_dir_exists(dest_folder))
-            vc_fs_mkdir(dest_folder);
-        if (vc_fs_file_exists(dest))
-            vc_fs_remove_file(dest);
-        result = (vc_fs_move(src, dest) == VC_OK)
-            ? simple_result(200, "File moved from %s to %s", src, dest)
-            : simple_result(400, "Error moving file %s to %s", src, dest);
-    }
-    vc_free(src);
-    vc_free(dest);
-    return result;
+    if (!vc::fs::file_exists(*src))
+        return result_json(404, std::format("File {} not found.", *src));
+    if (vc::fs::file_exists(dest) && !overwrite)
+        return result_json(409,
+            std::format("File {} already exists and overwrite is not allowed.", dest));
+
+    if (!vc::fs::dir_exists(std::string(dest_folder))) vc::fs::mkdir(std::string(dest_folder));
+    if (vc::fs::file_exists(dest)) vc::fs::remove_file(dest);
+    return vc::fs::move(*src, dest)
+        ? result_json(200, std::format("File moved from {} to {}", *src, dest))
+        : result_json(400, std::format("Error moving file {} to {}", *src, dest));
 }
+
+} // namespace fs_cmd

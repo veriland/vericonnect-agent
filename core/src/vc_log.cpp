@@ -1,8 +1,10 @@
 #include "vc/vc_log.h"
-#include "vc/vc_str.h"
-#include <stdio.h>
-#include <stdarg.h>
-#include <time.h>
+
+#include <cctype>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -11,152 +13,158 @@
 #  include <sys/time.h>
 #endif
 
-static vc_log_config g_cfg;
-static FILE *g_file = NULL;
-static bool g_init = false;
-
-static const char *level_tag(vc_log_level l)
+namespace vc::log
 {
-    switch (l) {
-    case VC_LOG_TRACE: return "TRACE";
-    case VC_LOG_DEBUG: return "DEBUG";
-    case VC_LOG_INFO:  return "INFO ";
-    case VC_LOG_SUCC:  return "SUCC ";
-    case VC_LOG_WARN:  return "WARN ";
-    case VC_LOG_ERROR: return "ERROR";
-    default:           return "?????";
-    }
-}
+    namespace
+    {
+        Config g_cfg;
+        std::FILE* g_file = nullptr;
+        bool g_init = false;
 
-void vc_log_config_defaults(vc_log_config *cfg)
-{
-    memset(cfg, 0, sizeof *cfg);
-    cfg->level = VC_LOG_INFO;
-    cfg->enabled = true;
-    cfg->console = true;
-    cfg->show_event_type = true;
-    cfg->time_precision = true;
-    cfg->max_file_size_mb = 10;
-    cfg->max_rotate_files = 10;
-}
+        const char* level_tag(Level l)
+        {
+            switch (l)
+            {
+            case Level::Trace: return "TRACE";
+            case Level::Debug: return "DEBUG";
+            case Level::Info: return "INFO ";
+            case Level::Succ: return "SUCC ";
+            case Level::Warn: return "WARN ";
+            case Level::Error: return "ERROR";
+            }
+            return "?????";
+        }
 
-vc_log_level vc_log_level_from_str(const char *s)
-{
-    if (!s) return VC_LOG_INFO;
-    if (!vc_stricmp(s, "LOG_TRACE") || !vc_stricmp(s, "TRACE")) return VC_LOG_TRACE;
-    if (!vc_stricmp(s, "LOG_DEBUG") || !vc_stricmp(s, "DEBUG")) return VC_LOG_DEBUG;
-    if (!vc_stricmp(s, "LOG_INFO")  || !vc_stricmp(s, "INFO"))  return VC_LOG_INFO;
-    if (!vc_stricmp(s, "LOG_WARN")  || !vc_stricmp(s, "WARN"))  return VC_LOG_WARN;
-    if (!vc_stricmp(s, "LOG_ERROR") || !vc_stricmp(s, "ERROR")) return VC_LOG_ERROR;
-    return VC_LOG_INFO;
-}
+        bool iequals(std::string_view a, std::string_view b) noexcept
+        {
+            if (a.size() != b.size()) return false;
+            for (std::size_t i = 0; i < a.size(); i++)
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i])))
+                    return false;
+            return true;
+        }
 
-int vc_log_init(const vc_log_config *cfg)
-{
-    vc_log_shutdown();
-    g_cfg = *cfg;
-    if (g_cfg.enabled && g_cfg.file_path[0]) {
-        g_file = fopen(g_cfg.file_path, "ab");
-        if (!g_file) return VC_E_IO;
-    }
-    g_init = true;
-    return VC_OK;
-}
-
-void vc_log_shutdown(void)
-{
-    if (g_file) { fclose(g_file); g_file = NULL; }
-    g_init = false;
-}
-
-static void rotate_if_needed(void)
-{
-    if (!g_file || g_cfg.max_file_size_mb <= 0) return;
-    long pos = ftell(g_file);
-    if (pos < (long)g_cfg.max_file_size_mb * 1024 * 1024) return;
-
-    fclose(g_file);
-    g_file = NULL;
-
-    /* shift file.(n-1) -> file.n ... file -> file.1 */
-    char from[600], to[600];
-    int n = g_cfg.max_rotate_files > 0 ? g_cfg.max_rotate_files : 5;
-    snprintf(to, sizeof to, "%s.%d", g_cfg.file_path, n);
-    remove(to);
-    for (int i = n - 1; i >= 1; i--) {
-        snprintf(from, sizeof from, "%s.%d", g_cfg.file_path, i);
-        snprintf(to, sizeof to, "%s.%d", g_cfg.file_path, i + 1);
-        rename(from, to);
-    }
-    snprintf(to, sizeof to, "%s.1", g_cfg.file_path);
-    rename(g_cfg.file_path, to);
-
-    g_file = fopen(g_cfg.file_path, "ab");
-}
-
-static void timestamp(char *buf, size_t n)
-{
-    time_t t = time(NULL);
-    struct tm tmv;
+        std::string timestamp()
+        {
+            std::time_t t = std::time(nullptr);
+            std::tm tmv;
 #if defined(_WIN32)
-    localtime_s(&tmv, &t);
-    struct _timeb tb;
-    _ftime_s(&tb);
-    int ms = tb.millitm;
+            localtime_s(&tmv, &t);
+            struct _timeb tb;
+            _ftime_s(&tb);
+            int ms = tb.millitm;
 #else
-    localtime_r(&t, &tmv);
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    int ms = (int)(tv.tv_usec / 1000);
+            localtime_r(&t, &tmv);
+            struct timeval tv;
+            gettimeofday(&tv, nullptr);
+            int ms = static_cast<int>(tv.tv_usec / 1000);
 #endif
-    if (g_cfg.time_precision)
-        snprintf(buf, n, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-                 tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-                 tmv.tm_hour, tmv.tm_min, tmv.tm_sec, ms);
-    else
-        snprintf(buf, n, "%04d-%02d-%02d %02d:%02d:%02d",
-                 tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-                 tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
-}
+            char buf[40];
+            if (g_cfg.time_precision)
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                              tmv.tm_hour, tmv.tm_min, tmv.tm_sec, ms);
+            else
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d",
+                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+            return buf;
+        }
 
-void vc_log(vc_log_level lvl, const char *fmt, ...)
-{
-    if (!g_init) {
-        /* not initialised: still echo to stderr so nothing is lost */
-        va_list ap;
-        va_start(ap, fmt);
-        vfprintf(stderr, fmt, ap);
-        fputc('\n', stderr);
-        va_end(ap);
-        return;
+        void rotate_if_needed()
+        {
+            if (!g_file || g_cfg.max_file_size_mb <= 0) return;
+            long pos = std::ftell(g_file);
+            if (pos < static_cast<long>(g_cfg.max_file_size_mb) * 1024 * 1024) return;
+
+            std::fclose(g_file);
+            g_file = nullptr;
+
+            const std::string& base = g_cfg.file_path;
+            int n = g_cfg.max_rotate_files > 0 ? g_cfg.max_rotate_files : 5;
+            std::string last = base + "." + std::to_string(n);
+            std::remove(last.c_str());
+            for (int i = n - 1; i >= 1; i--)
+            {
+                std::string from = base + "." + std::to_string(i);
+                std::string to = base + "." + std::to_string(i + 1);
+                std::rename(from.c_str(), to.c_str());
+            }
+            std::rename(base.c_str(), (base + ".1").c_str());
+
+            g_file = std::fopen(base.c_str(), "ab");
+        }
+    } // namespace
+
+    Status init(const Config& cfg)
+    {
+        shutdown();
+        g_cfg = cfg;
+        if (g_cfg.enabled && !g_cfg.file_path.empty())
+        {
+            g_file = std::fopen(g_cfg.file_path.c_str(), "ab");
+            if (!g_file) return std::unexpected(Error::Io);
+        }
+        g_init = true;
+        return {};
     }
-    if (!g_cfg.enabled) return;
-    /* SUCC logs at INFO priority */
-    vc_log_level eff = (lvl == VC_LOG_SUCC) ? VC_LOG_INFO : lvl;
-    if (eff < g_cfg.level) return;
 
-    char ts[40];
-    timestamp(ts, sizeof ts);
-
-    char msg[4096];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(msg, sizeof msg, fmt, ap);
-    va_end(ap);
-
-    if (g_cfg.console) {
-        if (g_cfg.show_event_type)
-            printf("%s [%s] %s\n", ts, level_tag(lvl), msg);
-        else
-            printf("%s %s\n", ts, msg);
-        fflush(stdout);
+    void shutdown()
+    {
+        if (g_file)
+        {
+            std::fclose(g_file);
+            g_file = nullptr;
+        }
+        g_init = false;
     }
-    if (g_file) {
-        if (g_cfg.show_event_type)
-            fprintf(g_file, "%s [%s] %s\n", ts, level_tag(lvl), msg);
-        else
-            fprintf(g_file, "%s %s\n", ts, msg);
-        fflush(g_file);
-        rotate_if_needed();
+
+    Level level_from_str(std::string_view s)
+    {
+        if (iequals(s, "LOG_TRACE") || iequals(s, "TRACE")) return Level::Trace;
+        if (iequals(s, "LOG_DEBUG") || iequals(s, "DEBUG")) return Level::Debug;
+        if (iequals(s, "LOG_INFO") || iequals(s, "INFO")) return Level::Info;
+        if (iequals(s, "LOG_WARN") || iequals(s, "WARN")) return Level::Warn;
+        if (iequals(s, "LOG_ERROR") || iequals(s, "ERROR")) return Level::Error;
+        return Level::Info;
     }
-}
+
+    void write(Level lvl, std::string_view msg)
+    {
+        if (!g_init)
+        {
+            /* not initialised: still echo to stderr so nothing is lost */
+            std::fprintf(stderr, "%.*s\n", static_cast<int>(msg.size()), msg.data());
+            return;
+        }
+        if (!g_cfg.enabled) return;
+        Level eff = (lvl == Level::Succ) ? Level::Info : lvl;
+        if (eff < g_cfg.level) return;
+
+        std::string ts = timestamp();
+
+        if (g_cfg.console)
+        {
+            if (g_cfg.show_event_type)
+                std::printf("%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
+                            static_cast<int>(msg.size()), msg.data());
+            else
+                std::printf("%s %.*s\n", ts.c_str(),
+                            static_cast<int>(msg.size()), msg.data());
+            std::fflush(stdout);
+        }
+        if (g_file)
+        {
+            if (g_cfg.show_event_type)
+                std::fprintf(g_file, "%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
+                             static_cast<int>(msg.size()), msg.data());
+            else
+                std::fprintf(g_file, "%s %.*s\n", ts.c_str(),
+                             static_cast<int>(msg.size()), msg.data());
+            std::fflush(g_file);
+            rotate_if_needed();
+        }
+    }
+} // namespace vc::log
+

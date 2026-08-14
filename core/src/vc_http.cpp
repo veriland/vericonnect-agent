@@ -1,179 +1,171 @@
 /* Minimal HTTPS/1.1 client used by the test app sender. */
 #include "vc/vc_http.h"
-#include "vc/vc_str.h"
 #include "vc/vc_tls.h"
 #include "vc/vc_os.h"
-#include <stdio.h>
 
-static int find_header_int(const char *headers, const char *name, long *out)
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+
+namespace vc::http
 {
-    const char *p = headers;
-    size_t nlen = strlen(name);
-    while (p && *p) {
-        if (!vc_strnicmp(p, name, nlen) && p[nlen] == ':') {
-            *out = atol(p + nlen + 1);
-            return VC_OK;
+    namespace
+    {
+        bool istarts_with(std::string_view s, std::string_view prefix) noexcept
+        {
+            if (s.size() < prefix.size()) return false;
+            for (std::size_t i = 0; i < prefix.size(); i++)
+                if (std::tolower(static_cast<unsigned char>(s[i])) !=
+                    std::tolower(static_cast<unsigned char>(prefix[i])))
+                    return false;
+            return true;
         }
-        p = strstr(p, "\r\n");
-        if (p) p += 2;
-    }
-    return VC_E_NOT_FOUND;
-}
 
-static bool header_has_value(const char *headers, const char *name,
-                             const char *value)
-{
-    const char *p = headers;
-    size_t nlen = strlen(name);
-    while (p && *p) {
-        if (!vc_strnicmp(p, name, nlen) && p[nlen] == ':') {
-            const char *v = p + nlen + 1;
-            const char *eol = strstr(v, "\r\n");
-            size_t vlen = eol ? (size_t)(eol - v) : strlen(v);
-            char tmp[256];
-            if (vlen >= sizeof tmp) vlen = sizeof tmp - 1;
-            memcpy(tmp, v, vlen);
-            tmp[vlen] = 0;
-            /* trim + case-insensitive substring match */
-            char *s = tmp;
-            while (*s == ' ' || *s == '\t') s++;
-            size_t sl = strlen(s), wl = strlen(value);
-            for (size_t i = 0; i + wl <= sl; i++)
-                if (!vc_strnicmp(s + i, value, wl)) return true;
+        /* Return the value of header `name` in a raw header block, or nullopt. */
+        std::optional<std::string_view> header_value(std::string_view headers, std::string_view name)
+        {
+            std::size_t pos = 0;
+            while (pos < headers.size())
+            {
+                std::size_t eol = headers.find("\r\n", pos);
+                std::string_view line = headers.substr(pos, eol == std::string_view::npos
+                                                                ? std::string_view::npos
+                                                                : eol - pos);
+                if (istarts_with(line, name) && line.size() > name.size() &&
+                    line[name.size()] == ':')
+                {
+                    std::string_view v = line.substr(name.size() + 1);
+                    while (!v.empty() && (v.front() == ' ' || v.front() == '\t'))
+                        v.remove_prefix(1);
+                    return v;
+                }
+                if (eol == std::string_view::npos) break;
+                pos = eol + 2;
+            }
+            return std::nullopt;
+        }
+
+        bool header_contains(std::string_view headers, std::string_view name, std::string_view needle)
+        {
+            std::optional<std::string_view> v = header_value(headers, name);
+            if (!v) return false;
+            for (std::size_t i = 0; i + needle.size() <= v->size(); i++)
+                if (istarts_with(v->substr(i), needle)) return true;
             return false;
         }
-        p = strstr(p, "\r\n");
-        if (p) p += 2;
-    }
-    return false;
-}
 
-int vc_http_request(const char *method, const char *host, int port,
-                    const char *path_and_query,
-                    const char *extra_headers,
-                    const void *body, size_t body_len,
-                    const char *content_type,
-                    int timeout_ms,
-                    vc_http_response *out)
-{
-    memset(out, 0, sizeof *out);
-
-    vc_sock *sock = vc_sock_connect(host, port, timeout_ms);
-    if (!sock) return VC_E_IO;
-    vc_tls *tls = vc_tls_connect(sock, host, timeout_ms);
-    if (!tls) return VC_E_TLS;
-
-    int result = VC_E_FAIL;
-    vc_buf req, in;
-    vc_buf_init(&req);
-    vc_buf_init(&in);
-
-    vc_buf_appendf(&req, "%s %s HTTP/1.1\r\nHost: %s\r\n",
-                   method, path_and_query, host);
-    if (body && body_len) {
-        vc_buf_appendf(&req, "Content-Length: %zu\r\n", body_len);
-        vc_buf_appendf(&req, "Content-Type: %s\r\n",
-                       content_type ? content_type : "application/json");
-    }
-    if (extra_headers) vc_buf_append_str(&req, extra_headers);
-    vc_buf_append_str(&req, "Connection: close\r\n\r\n");
-
-    if (vc_tls_send(tls, req.data, req.len) != VC_OK) goto done;
-    if (body && body_len)
-        if (vc_tls_send(tls, body, body_len) != VC_OK) goto done;
-
-    /* read everything until close (Connection: close) with timeout */
-    {
-        uint64_t deadline = vc_os_monotonic_ms() + (uint64_t)timeout_ms;
-        uint8_t tmp[8192];
-        for (;;) {
-            uint64_t now = vc_os_monotonic_ms();
-            if (now >= deadline) break;
-            int n = vc_tls_recv(tls, tmp, sizeof tmp, (int)(deadline - now));
-            if (n <= 0) break;
-            vc_buf_append(&in, tmp, (size_t)n);
-            /* early exit when Content-Length satisfied */
-            char *he = in.data ? strstr(in.data, "\r\n\r\n") : NULL;
-            if (he) {
-                long cl = -1;
-                char saved = *he;
-                *he = 0;
-                int has_cl = find_header_int(in.data, "Content-Length", &cl);
-                bool chunked = header_has_value(in.data, "Transfer-Encoding", "chunked");
-                *he = saved;
-                size_t hdr_len = (size_t)(he + 4 - in.data);
-                if (has_cl == VC_OK && !chunked && in.len >= hdr_len + (size_t)cl)
-                    break;
-            }
-        }
-    }
-
-    if (!in.data) goto done;
-    {
-        char *he = strstr(in.data, "\r\n\r\n");
-        if (!he) goto done;
-        size_t hdr_len = (size_t)(he - in.data);
-        size_t body_off = hdr_len + 4;
-
-        /* status line */
-        if (vc_strnicmp(in.data, "HTTP/", 5)) goto done;
-        const char *sp = strchr(in.data, ' ');
-        if (!sp) goto done;
-        out->status = atoi(sp + 1);
-        const char *sp2 = strchr(sp + 1, ' ');
-        const char *eol = strstr(in.data, "\r\n");
-        if (sp2 && eol && sp2 < eol)
-            out->status_text = vc_strndup(sp2 + 1, (size_t)(eol - sp2 - 1));
-        else
-            out->status_text = vc_strdup("");
-
-        out->headers = vc_strndup(in.data, hdr_len);
-
-        /* body: chunked or plain */
-        if (header_has_value(out->headers, "Transfer-Encoding", "chunked")) {
-            vc_buf dec;
-            vc_buf_init(&dec);
-            const char *p = in.data + body_off;
-            const char *end = in.data + in.len;
-            while (p < end) {
-                char *after = NULL;
-                long chunk = strtol(p, &after, 16);
+        Bytes decode_chunked(std::string_view body)
+        {
+            Bytes out;
+            const char* p = body.data();
+            const char* end = body.data() + body.size();
+            while (p < end)
+            {
+                char* after = nullptr;
+                long chunk = std::strtol(p, &after, 16);
                 if (!after || chunk < 0) break;
-                p = strstr(after, "\r\n");
-                if (!p) break;
-                p += 2;
+                /* advance past the CRLF following the size line */
+                const char* crlf = nullptr;
+                for (const char* q = after; q + 1 < end; q++)
+                    if (q[0] == '\r' && q[1] == '\n')
+                    {
+                        crlf = q;
+                        break;
+                    }
+                if (!crlf) break;
+                p = crlf + 2;
                 if (chunk == 0) break;
-                if (p + chunk > end) chunk = (long)(end - p);
-                vc_buf_append(&dec, p, (size_t)chunk);
+                if (p + chunk > end) chunk = static_cast<long>(end - p);
+                out.insert(out.end(), reinterpret_cast<const std::uint8_t*>(p),
+                           reinterpret_cast<const std::uint8_t*>(p + chunk));
                 p += chunk;
                 if (p + 2 <= end && p[0] == '\r' && p[1] == '\n') p += 2;
             }
-            out->body_len = dec.len;
-            out->body = (uint8_t *)vc_buf_take(&dec);
-        } else {
-            out->body_len = in.len - body_off;
-            out->body = static_cast<uint8_t*>(vc_alloc(out->body_len + 1));
-            if (out->body) {
-                memcpy(out->body, in.data + body_off, out->body_len);
-                out->body[out->body_len] = 0;
+            return out;
+        }
+    } // namespace
+
+    Result<Response> request(const Request& req)
+    {
+        Result<Socket> sock = Socket::connect(std::string(req.host), req.port, req.timeout_ms);
+        if (!sock) return std::unexpected(Error::Io);
+        Result<Tls> tls = Tls::connect(std::move(*sock), std::string(req.host), req.timeout_ms);
+        if (!tls) return std::unexpected(Error::Tls);
+
+        std::string request_head;
+        request_head.append(req.method).append(" ").append(req.path_and_query)
+                    .append(" HTTP/1.1\r\nHost: ").append(req.host).append("\r\n");
+        if (!req.body.empty())
+        {
+            request_head += "Content-Length: " + std::to_string(req.body.size()) + "\r\n";
+            request_head += "Content-Type: ";
+            request_head += req.content_type.empty() ? "application/json" : req.content_type;
+            request_head += "\r\n";
+        }
+        request_head.append(req.extra_headers);
+        request_head += "Connection: close\r\n\r\n";
+
+        if (!tls->send(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(request_head.data()), request_head.size())))
+            return std::unexpected(Error::Io);
+        if (!req.body.empty() && !tls->send(req.body))
+            return std::unexpected(Error::Io);
+
+        /* Read until close (Connection: close) or Content-Length satisfied. */
+        std::string in;
+        std::uint64_t deadline = os::monotonic_ms() + static_cast<std::uint64_t>(req.timeout_ms);
+        std::uint8_t tmp[8192];
+        for (;;)
+        {
+            std::uint64_t now = os::monotonic_ms();
+            if (now >= deadline) break;
+            auto n = tls->recv(std::span<std::uint8_t>(tmp, sizeof tmp),
+                               static_cast<int>(deadline - now));
+            if (!n || *n == 0) break;
+            in.append(reinterpret_cast<const char*>(tmp), *n);
+
+            std::size_t he = in.find("\r\n\r\n");
+            if (he != std::string::npos)
+            {
+                std::string_view head(in.data(), he);
+                std::optional<std::string_view> cl = header_value(head, "Content-Length");
+                bool chunked = header_contains(head, "Transfer-Encoding", "chunked");
+                if (cl && !chunked)
+                {
+                    long len = std::atol(std::string(*cl).c_str());
+                    if (in.size() >= he + 4 + static_cast<std::size_t>(len)) break;
+                }
             }
         }
-        result = VC_OK;
+
+        std::size_t he = in.find("\r\n\r\n");
+        if (he == std::string::npos) return std::unexpected(Error::Protocol);
+        std::size_t body_off = he + 4;
+
+        if (!istarts_with(in, "HTTP/")) return std::unexpected(Error::Protocol);
+        std::size_t sp = in.find(' ');
+        if (sp == std::string::npos) return std::unexpected(Error::Protocol);
+
+        Response resp;
+        resp.status = std::atoi(in.c_str() + sp + 1);
+        std::size_t sp2 = in.find(' ', sp + 1);
+        std::size_t eol = in.find("\r\n");
+        if (sp2 != std::string::npos && eol != std::string::npos && sp2 < eol)
+            resp.status_text = in.substr(sp2 + 1, eol - sp2 - 1);
+
+        resp.headers = in.substr(0, he);
+
+        if (header_contains(resp.headers, "Transfer-Encoding", "chunked"))
+        {
+            resp.body = decode_chunked(std::string_view(in).substr(body_off));
+        }
+        else
+        {
+            resp.body.assign(reinterpret_cast<const std::uint8_t*>(in.data() + body_off),
+                             reinterpret_cast<const std::uint8_t*>(in.data() + in.size()));
+        }
+        return resp;
     }
+} // namespace vc::http
 
-done:
-    vc_buf_free(&req);
-    vc_buf_free(&in);
-    vc_tls_close(tls);
-    if (result != VC_OK) vc_http_response_free(out);
-    return result;
-}
-
-void vc_http_response_free(vc_http_response *r)
-{
-    if (!r) return;
-    vc_free(r->status_text);
-    vc_free(r->headers);
-    vc_free(r->body);
-    memset(r, 0, sizeof *r);
-}

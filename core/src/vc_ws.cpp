@@ -1,340 +1,330 @@
 /*
- * RFC 6455 WebSocket client over vc_tls.
+ * RFC 6455 WebSocket client over vc::Tls.
  * - client frames are always masked
  * - fragmented messages are reassembled in recv
  * - ping is answered with pong transparently
- * - outgoing messages larger than VC_WS_FRAG_SIZE are fragmented
+ * - outgoing messages larger than kFragSize are fragmented
  */
 #include "vc/vc_ws.h"
-#include "vc/vc_str.h"
 #include "vc/vc_base64.h"
 #include "vc/vc_os.h"
-#include <stdio.h>
 
-#define VC_WS_FRAG_SIZE   (60 * 1024)
-#define VC_WS_MAX_MSG     (64u * 1024u * 1024u)   /* sanity cap 64 MB */
-#define VC_WS_HDR_TIMEOUT 15000
+#include <array>
+#include <cctype>
+#include <cstring>
+#include <optional>
 
-struct vc_ws {
-    vc_tls *tls;
-    vc_buf  in;          /* raw undecoded incoming bytes */
-    bool    closed;
-};
-
-/* --------------------------------------------------------------- */
-/* Connect / handshake                                              */
-/* --------------------------------------------------------------- */
-
-static int read_more(vc_ws *ws, int timeout_ms)
+namespace vc
 {
-    uint8_t tmp[8192];
-    int n = vc_tls_recv(ws->tls, tmp, sizeof tmp, timeout_ms);
-    if (n > 0) {
-        if (vc_buf_append(&ws->in, tmp, (size_t)n) != VC_OK)
-            return VC_E_NOMEM;
-        return n;
-    }
-    if (n == 0) return VC_E_CLOSED;
-    return n; /* VC_E_TIMEOUT / VC_E_* */
-}
+    namespace
+    {
+        constexpr std::size_t kFragSize = 60 * 1024;
+        constexpr std::uint64_t kMaxMsg = 64ull * 1024 * 1024; /* sanity cap 64 MB */
+        constexpr int kHdrTimeout = 15000;
 
-vc_ws *vc_ws_connect(const char *host, int port,
-                     const char *path_and_query,
-                     const char *extra_headers,
-                     int timeout_ms)
-{
-    vc_sock *sock = vc_sock_connect(host, port, timeout_ms);
-    if (!sock) return NULL;
-    vc_tls *tls = vc_tls_connect(sock, host, timeout_ms);
-    if (!tls) return NULL;   /* vc_tls_connect closes sock on failure */
+        bool istarts_with(std::span<const std::uint8_t> s, std::string_view prefix) noexcept
+        {
+            if (s.size() < prefix.size()) return false;
+            for (std::size_t i = 0; i < prefix.size(); i++)
+                if (std::tolower(s[i]) != std::tolower(static_cast<unsigned char>(prefix[i])))
+                    return false;
+            return true;
+        }
 
-    vc_ws *ws = static_cast<vc_ws*>(vc_alloc(sizeof *ws));
-    if (!ws) { vc_tls_close(tls); return NULL; }
-    ws->tls = tls;
-    ws->closed = false;
-    vc_buf_init(&ws->in);
+        /* Find the byte offset of needle in hay, or npos. */
+        std::size_t find(std::span<const std::uint8_t> hay, std::string_view needle) noexcept
+        {
+            if (needle.empty() || hay.size() < needle.size()) return static_cast<std::size_t>(-1);
+            for (std::size_t i = 0; i + needle.size() <= hay.size(); i++)
+                if (std::memcmp(hay.data() + i, needle.data(), needle.size()) == 0) return i;
+            return static_cast<std::size_t>(-1);
+        }
 
-    /* Sec-WebSocket-Key: 16 random bytes, base64 */
-    uint8_t nonce[16];
-    if (vc_os_random(nonce, sizeof nonce) != VC_OK) {
-        vc_ws_close(ws);
-        return NULL;
-    }
-    char *key = vc_base64_encode(nonce, sizeof nonce);
-    if (!key) { vc_ws_close(ws); return NULL; }
+        struct Frame
+        {
+            std::uint8_t opcode;
+            bool fin;
+            Bytes payload;
+        };
+    } // namespace
 
-    vc_buf req;
-    vc_buf_init(&req);
-    vc_buf_appendf(&req,
-        "GET %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Key: %s\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "%s"
-        "\r\n",
-        path_and_query, host, key, extra_headers ? extra_headers : "");
-    vc_free(key);
-
-    int rc = vc_tls_send(ws->tls, req.data, req.len);
-    vc_buf_free(&req);
-    if (rc != VC_OK) { vc_ws_close(ws); return NULL; }
-
-    /* read the 101 response header block */
-    uint64_t deadline = vc_os_monotonic_ms() + VC_WS_HDR_TIMEOUT;
-    char *hdr_end = NULL;
-    while (!(ws->in.data && (hdr_end = strstr(ws->in.data, "\r\n\r\n")))) {
-        uint64_t now = vc_os_monotonic_ms();
-        if (now >= deadline) { vc_ws_close(ws); return NULL; }
-        int n = read_more(ws, (int)(deadline - now));
-        if (n < 0) { vc_ws_close(ws); return NULL; }
+    Result<std::size_t> WebSocket::read_more(int timeout_ms)
+    {
+        std::uint8_t tmp[8192];
+        auto n = tls_.recv(std::span<std::uint8_t>(tmp, sizeof tmp), timeout_ms);
+        if (!n) return std::unexpected(n.error());
+        if (*n == 0) return std::unexpected(Error::Closed);
+        in_.insert(in_.end(), tmp, tmp + *n);
+        return *n;
     }
 
-    /* Status line: HTTP/1.1 101 ... */
-    if (vc_strnicmp(ws->in.data, "HTTP/1.1 101", 12) != 0 &&
-        vc_strnicmp(ws->in.data, "HTTP/1.0 101", 12) != 0) {
-        vc_ws_close(ws);
-        return NULL;
+    Result<WebSocket> WebSocket::connect(const std::string& host, int port,
+                                         const std::string& path_and_query,
+                                         std::string_view extra_headers,
+                                         int timeout_ms)
+    {
+        Result<Socket> sock = Socket::connect(host, port, timeout_ms);
+        if (!sock) return std::unexpected(sock.error());
+        Result<Tls> tls = Tls::connect(std::move(*sock), host, timeout_ms);
+        if (!tls) return std::unexpected(tls.error());
+
+        WebSocket ws(std::move(*tls));
+
+        /* Sec-WebSocket-Key: 16 random bytes, base64 */
+        std::array<std::uint8_t, 16> nonce;
+        if (!os::random_bytes(nonce)) return std::unexpected(Error::Fail);
+        std::string key = base64_encode(std::span<const std::uint8_t>(nonce));
+
+        std::string req;
+        req.reserve(256);
+        req.append("GET ").append(path_and_query).append(" HTTP/1.1\r\n")
+           .append("Host: ").append(host).append("\r\n")
+           .append("Upgrade: websocket\r\n")
+           .append("Connection: Upgrade\r\n")
+           .append("Sec-WebSocket-Key: ").append(key).append("\r\n")
+           .append("Sec-WebSocket-Version: 13\r\n")
+           .append(extra_headers)
+           .append("\r\n");
+
+        if (!ws.tls_.send(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(req.data()), req.size())))
+            return std::unexpected(Error::Io);
+
+        /* read the 101 response header block */
+        std::uint64_t deadline = os::monotonic_ms() + kHdrTimeout;
+        std::size_t hdr_end;
+        while ((hdr_end = find(ws.in_, "\r\n\r\n")) == static_cast<std::size_t>(-1))
+        {
+            std::uint64_t now = os::monotonic_ms();
+            if (now >= deadline) return std::unexpected(Error::Timeout);
+            if (!ws.read_more(static_cast<int>(deadline - now))) return std::unexpected(Error::Io);
+        }
+
+        if (!istarts_with(ws.in_, "HTTP/1.1 101") && !istarts_with(ws.in_, "HTTP/1.0 101"))
+            return std::unexpected(Error::Protocol);
+
+        /* We rely on TLS for integrity; the Sec-WebSocket-Accept SHA-1 check is
+         * intentionally skipped. */
+        ws.in_.erase(ws.in_.begin(), ws.in_.begin() + hdr_end + 4);
+        return ws;
     }
-    /* We rely on TLS for integrity; the Sec-WebSocket-Accept SHA-1
-     * check is intentionally skipped. */
-    vc_buf_consume(&ws->in, (size_t)(hdr_end + 4 - ws->in.data));
-    return ws;
-}
 
-/* --------------------------------------------------------------- */
-/* Send                                                             */
-/* --------------------------------------------------------------- */
+    Status WebSocket::send_frame(std::uint8_t opcode, bool fin, std::span<const std::uint8_t> data)
+    {
+        std::uint8_t hdr[14];
+        std::size_t h = 0;
+        std::size_t len = data.size();
+        hdr[h++] = static_cast<std::uint8_t>((fin ? 0x80 : 0x00) | opcode);
+        if (len < 126)
+        {
+            hdr[h++] = static_cast<std::uint8_t>(0x80 | len);
+        }
+        else if (len <= 0xFFFF)
+        {
+            hdr[h++] = 0x80 | 126;
+            hdr[h++] = static_cast<std::uint8_t>(len >> 8);
+            hdr[h++] = static_cast<std::uint8_t>(len);
+        }
+        else
+        {
+            hdr[h++] = 0x80 | 127;
+            for (int i = 7; i >= 0; i--)
+                hdr[h++] = static_cast<std::uint8_t>(static_cast<std::uint64_t>(len) >> (i * 8));
+        }
+        std::uint8_t mask[4];
+        if (!os::random_bytes(mask)) return std::unexpected(Error::Fail);
+        std::memcpy(hdr + h, mask, 4);
+        h += 4;
 
-static int send_frame(vc_ws *ws, uint8_t opcode, bool fin,
-                      const uint8_t *data, size_t len)
-{
-    uint8_t hdr[14];
-    size_t h = 0;
-    hdr[h++] = (uint8_t)((fin ? 0x80 : 0x00) | opcode);
-    if (len < 126) {
-        hdr[h++] = (uint8_t)(0x80 | len);
-    } else if (len <= 0xFFFF) {
-        hdr[h++] = 0x80 | 126;
-        hdr[h++] = (uint8_t)(len >> 8);
-        hdr[h++] = (uint8_t)len;
-    } else {
-        hdr[h++] = 0x80 | 127;
-        for (int i = 7; i >= 0; i--)
-            hdr[h++] = (uint8_t)((uint64_t)len >> (i * 8));
+        if (!tls_.send(std::span<const std::uint8_t>(hdr, h))) return std::unexpected(Error::Io);
+
+        if (len)
+        {
+            std::uint8_t chunk[8192];
+            std::size_t off = 0;
+            while (off < len)
+            {
+                std::size_t n = len - off;
+                if (n > sizeof chunk) n = sizeof chunk;
+                for (std::size_t i = 0; i < n; i++)
+                    chunk[i] = data[off + i] ^ mask[(off + i) & 3];
+                if (!tls_.send(std::span<const std::uint8_t>(chunk, n)))
+                    return std::unexpected(Error::Io);
+                off += n;
+            }
+        }
+        return {};
     }
-    uint8_t mask[4];
-    if (vc_os_random(mask, 4) != VC_OK) return VC_E_FAIL;
-    memcpy(hdr + h, mask, 4);
-    h += 4;
 
-    if (vc_tls_send(ws->tls, hdr, h) != VC_OK) return VC_E_IO;
+    Status WebSocket::send(MsgType type, std::span<const std::uint8_t> data)
+    {
+        if (closed_) return std::unexpected(Error::Closed);
+        std::uint8_t opcode = (type == MsgType::Text) ? 0x1 : 0x2;
 
-    if (len) {
-        uint8_t chunk[8192];
-        size_t off = 0;
-        while (off < len) {
-            size_t n = len - off;
-            if (n > sizeof chunk) n = sizeof chunk;
-            for (size_t i = 0; i < n; i++)
-                chunk[i] = data[off + i] ^ mask[(off + i) & 3];
-            if (vc_tls_send(ws->tls, chunk, n) != VC_OK) return VC_E_IO;
+        if (data.size() <= kFragSize)
+            return send_frame(opcode, true, data);
+
+        std::size_t off = 0;
+        bool first = true;
+        while (off < data.size())
+        {
+            std::size_t n = data.size() - off;
+            if (n > kFragSize) n = kFragSize;
+            bool fin = (off + n == data.size());
+            Status rc = send_frame(first ? opcode : 0x0, fin, data.subspan(off, n));
+            if (!rc) return rc;
+            first = false;
             off += n;
         }
+        return {};
     }
-    return VC_OK;
-}
 
-int vc_ws_send(vc_ws *ws, vc_ws_msg_type type, const void *data, size_t len)
-{
-    if (!ws || ws->closed) return VC_E_CLOSED;
-    const uint8_t *p = static_cast<const uint8_t*>(data);
-    uint8_t opcode = (type == VC_WS_TEXT) ? 0x1 : 0x2;
-
-    if (len <= VC_WS_FRAG_SIZE)
-        return send_frame(ws, opcode, true, p, len);
-
-    /* fragment */
-    size_t off = 0;
-    bool first = true;
-    while (off < len) {
-        size_t n = len - off;
-        if (n > VC_WS_FRAG_SIZE) n = VC_WS_FRAG_SIZE;
-        bool fin = (off + n == len);
-        int rc = send_frame(ws, first ? opcode : 0x0, fin, p + off, n);
-        if (rc != VC_OK) return rc;
-        first = false;
-        off += n;
+    Status WebSocket::send_ping()
+    {
+        if (closed_) return std::unexpected(Error::Closed);
+        return send_frame(0x9, true, {});
     }
-    return VC_OK;
-}
 
-int vc_ws_send_ping(vc_ws *ws)
-{
-    if (!ws || ws->closed) return VC_E_CLOSED;
-    return send_frame(ws, 0x9, true, NULL, 0);
-}
-
-int vc_ws_send_close(vc_ws *ws, uint16_t code)
-{
-    if (!ws || ws->closed) return VC_E_CLOSED;
-    uint8_t payload[2] = { (uint8_t)(code >> 8), (uint8_t)code };
-    return send_frame(ws, 0x8, true, payload, 2);
-}
-
-/* --------------------------------------------------------------- */
-/* Receive                                                          */
-/* --------------------------------------------------------------- */
-
-/* Try to parse one frame from ws->in. Returns VC_OK when a full frame
- * was consumed (opcode/payload out), VC_E_TIMEOUT if more bytes are
- * needed, error otherwise. payload is vc_alloc'd. */
-static int parse_frame(vc_ws *ws, uint8_t *opcode, bool *fin,
-                       uint8_t **payload, size_t *plen)
-{
-    const uint8_t *p = (const uint8_t *)ws->in.data;
-    size_t avail = ws->in.len;
-    if (avail < 2) return VC_E_TIMEOUT;
-
-    *fin = (p[0] & 0x80) != 0;
-    *opcode = p[0] & 0x0F;
-    bool masked = (p[1] & 0x80) != 0;
-    uint64_t len = p[1] & 0x7F;
-    size_t pos = 2;
-
-    if (len == 126) {
-        if (avail < pos + 2) return VC_E_TIMEOUT;
-        len = ((uint64_t)p[pos] << 8) | p[pos+1];
-        pos += 2;
-    } else if (len == 127) {
-        if (avail < pos + 8) return VC_E_TIMEOUT;
-        len = 0;
-        for (int i = 0; i < 8; i++) len = (len << 8) | p[pos + i];
-        pos += 8;
+    Status WebSocket::send_close(std::uint16_t code)
+    {
+        if (closed_) return std::unexpected(Error::Closed);
+        std::uint8_t payload[2] = {
+            static_cast<std::uint8_t>(code >> 8),
+            static_cast<std::uint8_t>(code)
+        };
+        return send_frame(0x8, true, std::span<const std::uint8_t>(payload, 2));
     }
-    if (len > VC_WS_MAX_MSG) return VC_E_PROTOCOL;
 
-    uint8_t mask[4] = {0};
-    if (masked) {
-        if (avail < pos + 4) return VC_E_TIMEOUT;
-        memcpy(mask, p + pos, 4);
-        pos += 4;
-    }
-    if (avail < pos + (size_t)len) return VC_E_TIMEOUT;
+    /* Parse one frame from in_. Returns a Frame, nullopt if more bytes are
+     * needed, or an error. */
+    namespace
+    {
+        Result<std::optional<Frame>> parse_frame(Bytes& in)
+        {
+            const std::uint8_t* p = in.data();
+            std::size_t avail = in.size();
+            if (avail < 2) return std::optional<Frame>{};
 
-    uint8_t *out = static_cast<uint8_t*>(vc_alloc((size_t)len + 1));
-    if (!out) return VC_E_NOMEM;
-    memcpy(out, p + pos, (size_t)len);
-    if (masked)
-        for (size_t i = 0; i < (size_t)len; i++) out[i] ^= mask[i & 3];
-    out[len] = 0;
+            Frame f;
+            f.fin = (p[0] & 0x80) != 0;
+            f.opcode = p[0] & 0x0F;
+            bool masked = (p[1] & 0x80) != 0;
+            std::uint64_t len = p[1] & 0x7F;
+            std::size_t pos = 2;
 
-    vc_buf_consume(&ws->in, pos + (size_t)len);
-    *payload = out;
-    *plen = (size_t)len;
-    return VC_OK;
-}
-
-int vc_ws_recv_msg(vc_ws *ws, vc_ws_msg_type *type,
-                   uint8_t **payload, size_t *len, int timeout_ms)
-{
-    if (!ws) return VC_E_INVALID_ARG;
-    if (ws->closed) return VC_E_CLOSED;
-
-    *payload = NULL;
-    *len = 0;
-
-    vc_buf msg;
-    vc_buf_init(&msg);
-    uint8_t msg_opcode = 0;
-    bool in_fragmented = false;
-
-    uint64_t deadline = vc_os_monotonic_ms() + (uint64_t)(timeout_ms < 0 ? 0 : timeout_ms);
-
-    for (;;) {
-        uint8_t opcode;
-        bool fin;
-        uint8_t *frag = NULL;
-        size_t frag_len = 0;
-
-        int rc = parse_frame(ws, &opcode, &fin, &frag, &frag_len);
-        if (rc == VC_E_TIMEOUT) {
-            uint64_t now = vc_os_monotonic_ms();
-            if (timeout_ms >= 0 && now >= deadline) {
-                vc_buf_free(&msg);
-                return VC_E_TIMEOUT;
+            if (len == 126)
+            {
+                if (avail < pos + 2) return std::optional<Frame>{};
+                len = (static_cast<std::uint64_t>(p[pos]) << 8) | p[pos + 1];
+                pos += 2;
             }
-            int wait = timeout_ms < 0 ? 60000 : (int)(deadline - now);
-            int n = read_more(ws, wait);
-            if (n == VC_E_TIMEOUT) {
-                if (timeout_ms < 0) continue;
-                vc_buf_free(&msg);
-                return VC_E_TIMEOUT;
+            else if (len == 127)
+            {
+                if (avail < pos + 8) return std::optional<Frame>{};
+                len = 0;
+                for (int i = 0; i < 8; i++) len = (len << 8) | p[pos + i];
+                pos += 8;
             }
-            if (n < 0) {
-                vc_buf_free(&msg);
-                ws->closed = true;
-                return n;
+            if (len > kMaxMsg) return std::unexpected(Error::Protocol);
+
+            std::uint8_t mask[4] = {0};
+            if (masked)
+            {
+                if (avail < pos + 4) return std::optional<Frame>{};
+                std::memcpy(mask, p + pos, 4);
+                pos += 4;
             }
-            continue;
+            if (avail < pos + static_cast<std::size_t>(len)) return std::optional<Frame>{};
+
+            f.payload.assign(p + pos, p + pos + len);
+            if (masked)
+                for (std::size_t i = 0; i < f.payload.size(); i++) f.payload[i] ^= mask[i & 3];
+
+            in.erase(in.begin(), in.begin() + pos + static_cast<std::size_t>(len));
+            return std::optional<Frame>{std::move(f)};
         }
-        if (rc != VC_OK) { vc_buf_free(&msg); return rc; }
+    } // namespace
 
-        switch (opcode) {
-        case 0x9: /* ping -> pong with same payload */
-            send_frame(ws, 0xA, true, frag, frag_len);
-            vc_free(frag);
-            continue;
-        case 0xA: /* pong */
-            vc_free(frag);
-            continue;
-        case 0x8: /* close */
-            send_frame(ws, 0x8, true, frag, frag_len > 2 ? 2 : frag_len);
-            ws->closed = true;
-            *type = VC_WS_CLOSE;
-            *payload = frag;
-            *len = frag_len;
-            vc_buf_free(&msg);
-            return VC_E_CLOSED;
-        case 0x0: /* continuation */
-            if (!in_fragmented) { vc_free(frag); vc_buf_free(&msg); return VC_E_PROTOCOL; }
-            vc_buf_append(&msg, frag, frag_len);
-            vc_free(frag);
-            if (fin) {
-                *type = (msg_opcode == 0x1) ? VC_WS_TEXT : VC_WS_BINARY;
-                *len = msg.len;
-                *payload = (uint8_t *)vc_buf_take(&msg);
-                return VC_OK;
+    Result<WebSocket::Message> WebSocket::recv(int timeout_ms)
+    {
+        if (closed_) return std::unexpected(Error::Closed);
+
+        Bytes msg;
+        std::uint8_t msg_opcode = 0;
+        bool in_fragmented = false;
+
+        std::uint64_t deadline =
+            os::monotonic_ms() + static_cast<std::uint64_t>(timeout_ms < 0 ? 0 : timeout_ms);
+
+        for (;;)
+        {
+            Result<std::optional<Frame>> pf = parse_frame(in_);
+            if (!pf) return std::unexpected(pf.error());
+
+            if (!*pf)
+            {
+                /* need more bytes */
+                std::uint64_t now = os::monotonic_ms();
+                if (timeout_ms >= 0 && now >= deadline) return std::unexpected(Error::Timeout);
+                int wait = timeout_ms < 0 ? 60000 : static_cast<int>(deadline - now);
+                auto n = read_more(wait);
+                if (!n)
+                {
+                    if (n.error() == Error::Timeout)
+                    {
+                        if (timeout_ms < 0) continue;
+                        return std::unexpected(Error::Timeout);
+                    }
+                    closed_ = true;
+                    return std::unexpected(n.error());
+                }
+                continue;
             }
-            continue;
-        case 0x1:
-        case 0x2:
-            if (in_fragmented) { vc_free(frag); vc_buf_free(&msg); return VC_E_PROTOCOL; }
-            if (fin) {
-                *type = (opcode == 0x1) ? VC_WS_TEXT : VC_WS_BINARY;
-                *payload = frag;
-                *len = frag_len;
-                vc_buf_free(&msg);
-                return VC_OK;
+
+            Frame f = std::move(**pf);
+            switch (f.opcode)
+            {
+            case 0x9: /* ping -> pong with same payload */
+                send_frame(0xA, true, f.payload);
+                continue;
+            case 0xA: /* pong */
+                continue;
+            case 0x8: /* close */
+                send_frame(0x8, true, std::span<const std::uint8_t>(f.payload).first(
+                               f.payload.size() > 2 ? 2 : f.payload.size()));
+                closed_ = true;
+                return Message{MsgType::Close, std::move(f.payload)};
+            case 0x0: /* continuation */
+                if (!in_fragmented) return std::unexpected(Error::Protocol);
+                msg.insert(msg.end(), f.payload.begin(), f.payload.end());
+                if (f.fin)
+                    return Message{
+                        msg_opcode == 0x1 ? MsgType::Text : MsgType::Binary,
+                        std::move(msg)
+                    };
+                continue;
+            case 0x1:
+            case 0x2:
+                if (in_fragmented) return std::unexpected(Error::Protocol);
+                if (f.fin)
+                    return Message{
+                        f.opcode == 0x1 ? MsgType::Text : MsgType::Binary,
+                        std::move(f.payload)
+                    };
+                in_fragmented = true;
+                msg_opcode = f.opcode;
+                msg.insert(msg.end(), f.payload.begin(), f.payload.end());
+                continue;
+            default:
+                return std::unexpected(Error::Protocol);
             }
-            in_fragmented = true;
-            msg_opcode = opcode;
-            vc_buf_append(&msg, frag, frag_len);
-            vc_free(frag);
-            continue;
-        default:
-            vc_free(frag);
-            vc_buf_free(&msg);
-            return VC_E_PROTOCOL;
         }
     }
-}
 
-void vc_ws_close(vc_ws *ws)
-{
-    if (!ws) return;
-    if (ws->tls) vc_tls_close(ws->tls);
-    vc_buf_free(&ws->in);
-    vc_free(ws);
-}
+    void WebSocket::close()
+    {
+        tls_.close();
+        in_.clear();
+        closed_ = true;
+    }
+} // namespace vc

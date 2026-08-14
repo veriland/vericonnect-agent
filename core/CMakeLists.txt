@@ -4,7 +4,8 @@
 # loading, filesystem) live under platform/ and are selected here.
 
 set(VC_CORE_SOURCES
-    src/vc_str.cpp
+    src/vc_common.cpp
+    src/vc_fs.cpp
     src/vc_json.cpp
     src/vc_base64.cpp
     src/vc_sha256.cpp

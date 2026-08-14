@@ -8,27 +8,50 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_sock vc_sock;
+#include <cstdint>
+#include <span>
+#include <string>
 
-int  vc_sock_global_init(void);       /* WSAStartup on Windows */
-void vc_sock_global_cleanup(void);
+namespace vc
+{
+    /* A connected TCP client socket. Move-only; the descriptor is closed on
+ * destruction. */
+    class Socket
+    {
+    public:
+        Socket() noexcept = default;
+        ~Socket();
+        Socket(Socket&& other) noexcept;
+        Socket& operator=(Socket&& other) noexcept;
+        Socket(const Socket&) = delete;
+        Socket& operator=(const Socket&) = delete;
 
-/* Connect to host:port (TCP). timeout_ms for the connect itself. */
-vc_sock *vc_sock_connect(const char *host, int port, int timeout_ms);
-void     vc_sock_close(vc_sock *s);
+        static void global_init() noexcept; /* WSAStartup on Windows */
+        static void global_cleanup() noexcept;
 
-/* Returns bytes sent, or VC_E_* (<0). Sends all bytes unless error. */
-int vc_sock_send(vc_sock *s, const void *data, size_t len);
+        /* Connect to host:port (TCP). timeout_ms bounds the connect. */
+        static Result<Socket> connect(const std::string& host, int port, int timeout_ms);
 
-/* Returns bytes received (>0), 0 on orderly close, VC_E_TIMEOUT if
- * nothing arrived within timeout_ms, other VC_E_* on error. */
-int vc_sock_recv(vc_sock *s, void *buf, size_t len, int timeout_ms);
+        /* Send all bytes; returns the count sent or an error. */
+        Result<std::size_t> send(std::span<const std::uint8_t> data);
 
-#ifdef __cplusplus
-}
-#endif
+        /* Returns bytes read (>0), 0 on orderly close, or an error
+     * (Error::Timeout if nothing arrived within timeout_ms). */
+        Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
+
+        bool valid() const noexcept { return fd_ >= 0; }
+        void close() noexcept;
+
+    private:
+        explicit Socket(std::intptr_t fd) noexcept : fd_(fd)
+        {
+        }
+
+        std::intptr_t fd_ = -1;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

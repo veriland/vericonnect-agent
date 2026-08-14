@@ -7,13 +7,11 @@
  * duration of the adapter call and reverts immediately afterwards.
  *
  * Impersonation is applied to the CURRENT THREAD only, so it is safe in the
- * agent's single-threaded, synchronous dispatch path and never leaks onto
- * other threads.
+ * agent's single-threaded, synchronous dispatch path.
  *
  * Platform support:
  *   Windows  - LogonUser + ImpersonateLoggedOnUser (real).
- *   POSIX    - returns VC_E_UNSUPPORTED (no silent fallback to the
- *              service account).
+ *   POSIX    - unsupported (Error::Unsupported, no silent fallback).
  */
 #ifndef VC_IMPERSONATE_H
 #define VC_IMPERSONATE_H
@@ -21,34 +19,47 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
+
+#include <expected>
+#include <memory>
+#include <string>
+#include <string_view>
+
+namespace vc
+{
+    struct ImpersonationError
+    {
+        Error code;
+        std::string message; /* log-safe: never contains the password */
+    };
+
+    /* RAII thread impersonation: constructed via begin(), reverts on destruction. */
+    class Impersonation
+    {
+    public:
+        Impersonation() noexcept;
+        ~Impersonation();
+        Impersonation(Impersonation&& other) noexcept;
+        Impersonation& operator=(Impersonation&& other) noexcept;
+        Impersonation(const Impersonation&) = delete;
+        Impersonation& operator=(const Impersonation&) = delete;
+
+        /*
+     * Begin impersonating `user` on the calling thread.
+     *   user     : account name (UTF-8), required.
+     *   domain   : domain or machine name; empty or "." = local.
+     *   password : plaintext password (UTF-8); may be empty.
+     */
+        static std::expected<Impersonation, ImpersonationError>
+        begin(std::string_view user, std::string_view domain, std::string_view password);
+
+    private:
+        struct Impl;
+        explicit Impersonation(std::unique_ptr<Impl> impl) noexcept;
+        std::unique_ptr<Impl> impl_;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
+
 #endif
-
-/* Opaque per-platform impersonation context (holds a logon token). */
-typedef struct vc_impersonation vc_impersonation;
-
-/*
- * Begin impersonating `user` on the calling thread.
- *   user     : account name (UTF-8), required.
- *   domain   : domain or machine name (UTF-8); NULL, empty or "." = local.
- *   password : plaintext password (UTF-8); may be empty.
- *
- * On success returns VC_OK and *out receives a context that MUST be passed
- * to vc_impersonate_end to revert. On failure returns an error code and
- * *out is NULL.
- *
- * If `err` is non-NULL, *err receives a short, human-readable message that
- * is SAFE TO LOG (it never contains the password); free it with vc_free.
- */
-int  vc_impersonate_begin(const char *user, const char *domain,
-                          const char *password, vc_impersonation **out,
-                          char **err);
-
-/* Revert to the process identity and release the context. NULL = no-op. */
-void vc_impersonate_end(vc_impersonation *imp);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* VC_IMPERSONATE_H */

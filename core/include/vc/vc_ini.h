@@ -5,29 +5,44 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_ini vc_ini;
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
-vc_ini *vc_ini_new(void);
-vc_ini *vc_ini_load(const char *path);   /* NULL if file unreadable */
-int     vc_ini_save(const vc_ini *ini, const char *path);
-void    vc_ini_free(vc_ini *ini);
+namespace vc
+{
+    /* Ordered INI store. Keys are grouped by section; insertion order is
+ * preserved so save() reproduces a stable layout. Lookups are
+ * case-insensitive on both section and key. */
+    class Ini
+    {
+    public:
+        static Result<Ini> load(const std::string& path);
+        Status save(const std::string& path) const;
 
-const char *vc_ini_get(const vc_ini *ini, const char *section,
-                       const char *key, const char *def);
-int         vc_ini_get_int(const vc_ini *ini, const char *section,
-                           const char *key, int def);
-bool        vc_ini_get_bool(const vc_ini *ini, const char *section,
-                            const char *key, bool def);
-int         vc_ini_set(vc_ini *ini, const char *section,
-                       const char *key, const char *value);
-int         vc_ini_set_int(vc_ini *ini, const char *section,
-                           const char *key, int value);
+        std::optional<std::string_view> get(std::string_view section,
+                                            std::string_view key) const;
+        int get_int(std::string_view section, std::string_view key, int def) const;
+        bool get_bool(std::string_view section, std::string_view key, bool def) const;
 
-#ifdef __cplusplus
-}
-#endif
+        void set(std::string_view section, std::string_view key, std::string_view value);
+        void set_int(std::string_view section, std::string_view key, int value);
+
+    private:
+        struct Entry
+        {
+            std::string section, key, value;
+        };
+
+        Entry* find(std::string_view section, std::string_view key);
+        const Entry* find(std::string_view section, std::string_view key) const;
+
+        std::vector<Entry> entries_;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

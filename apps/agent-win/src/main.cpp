@@ -7,7 +7,7 @@
  *   vc-agent --console     run in the foreground (verbose)
  *   vc-agent               run as a service (invoked by the SCM)
  *
- * The portable agent logic lives in core (vc_agent_run); this file is
+ * The portable agent logic lives in core (vc::agent::run); this file is
  * only the Windows Service Control Manager glue.
  */
 #include <windows.h>
@@ -149,12 +149,11 @@ static void WINAPI svc_main(DWORD argc, LPWSTR *argv)
     set_state(SERVICE_START_PENDING, NO_ERROR);
     set_state(SERVICE_RUNNING, NO_ERROR);
 
-    vc_agent_options opts;
-    memset(&opts, 0, sizeof opts);
+    vc::agent::Options opts;
     opts.verbose = false;
-    int rc = vc_agent_run(&opts, &g_stop);
+    bool ok = vc::agent::run(opts, [] { return g_stop; }).has_value();
 
-    set_state(SERVICE_STOPPED, rc == 0 ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR);
+    set_state(SERVICE_STOPPED, ok ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR);
 }
 
 /* ---------------------------------------------------------------- */
@@ -175,11 +174,10 @@ static int run_console(const char *settings_path)
 {
     SetConsoleCtrlHandler(console_ctrl, TRUE);
     printf("VeriConnect Agent (console mode) - Ctrl+C to stop\n");
-    vc_agent_options opts;
-    memset(&opts, 0, sizeof opts);
-    opts.settings_path = settings_path;
+    vc::agent::Options opts;
+    if (settings_path) opts.settings_path = settings_path;
     opts.verbose = true;
-    return vc_agent_run(&opts, &g_stop) == 0 ? 0 : 1;
+    return vc::agent::run(opts, [] { return g_stop; }) ? 0 : 1;
 }
 
 int main(int argc, char **argv)

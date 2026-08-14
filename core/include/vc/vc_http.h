@@ -1,6 +1,6 @@
 /*
- * vc_http.h - minimal HTTPS/1.1 client (used by the sender side of the
- * test app to POST commands through the Azure Relay HTTP endpoint).
+ * vc_http.h - minimal HTTPS/1.1 client (used by the sender side of the test
+ * app to POST commands through the Azure Relay HTTP endpoint).
  */
 #ifndef VC_HTTP_H
 #define VC_HTTP_H
@@ -8,34 +8,38 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_http_response {
-    int     status;
-    char   *status_text;   /* vc_free */
-    char   *headers;       /* raw header block, vc_free */
-    uint8_t*body;          /* vc_free */
-    size_t  body_len;
-} vc_http_response;
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
 
-/*
- * Performs a single HTTPS request.
- * extra_headers: optional "Header: value\r\n" lines (may be NULL).
- * body may be NULL for GET.
- */
-int vc_http_request(const char *method, const char *host, int port,
-                    const char *path_and_query,
-                    const char *extra_headers,
-                    const void *body, size_t body_len,
-                    const char *content_type,
-                    int timeout_ms,
-                    vc_http_response *out);
+namespace vc::http
+{
+    struct Response
+    {
+        int status = 0;
+        std::string status_text;
+        std::string headers; /* raw header block */
+        Bytes body;
+    };
 
-void vc_http_response_free(vc_http_response *r);
+    struct Request
+    {
+        std::string_view method;
+        std::string_view host;
+        int port = 443;
+        std::string_view path_and_query;
+        std::string_view extra_headers; /* "H: v\r\n" lines, optional */
+        std::span<const std::uint8_t> body; /* may be empty               */
+        std::string_view content_type; /* default application/json   */
+        int timeout_ms = 30000;
+    };
 
-#ifdef __cplusplus
-}
-#endif
+    /* Perform a single HTTPS request. */
+    Result<Response> request(const Request& req);
+} // namespace vc::http
+
+#endif /* __cplusplus */
 
 #endif

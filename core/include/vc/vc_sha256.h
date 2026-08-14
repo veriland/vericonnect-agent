@@ -5,29 +5,47 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-#define VC_SHA256_DIGEST_LEN 32
+#include <array>
+#include <cstdint>
+#include <span>
+#include <string_view>
 
-typedef struct vc_sha256_ctx {
-    uint32_t state[8];
-    uint64_t bitlen;
-    uint8_t  buffer[64];
-    size_t   buflen;
-} vc_sha256_ctx;
+namespace vc
+{
+    inline constexpr std::size_t kSha256DigestLen = 32;
 
-void vc_sha256_init(vc_sha256_ctx *ctx);
-void vc_sha256_update(vc_sha256_ctx *ctx, const void *data, size_t len);
-void vc_sha256_final(vc_sha256_ctx *ctx, uint8_t digest[VC_SHA256_DIGEST_LEN]);
-void vc_sha256(const void *data, size_t len, uint8_t digest[VC_SHA256_DIGEST_LEN]);
+    using Sha256Digest = std::array<std::uint8_t, kSha256DigestLen>;
 
-void vc_hmac_sha256(const void *key, size_t key_len,
-                    const void *msg, size_t msg_len,
-                    uint8_t digest[VC_SHA256_DIGEST_LEN]);
+    /* Incremental SHA-256 hasher. Construct, update() one or more times, finish(). */
+    class Sha256
+    {
+    public:
+        Sha256() noexcept { reset(); }
 
-#ifdef __cplusplus
-}
-#endif
+        void reset() noexcept;
+        Sha256& update(std::span<const std::uint8_t> data) noexcept;
+        Sha256& update(std::string_view s) noexcept;
+        Sha256Digest finish() noexcept;
+
+    private:
+        void block(const std::uint8_t* p) noexcept;
+
+        std::uint32_t state_[8];
+        std::uint64_t bitlen_;
+        std::uint8_t buffer_[64];
+        std::size_t buflen_;
+    };
+
+    /* One-shot helpers. */
+    Sha256Digest sha256(std::span<const std::uint8_t> data) noexcept;
+    Sha256Digest sha256(std::string_view s) noexcept;
+
+    Sha256Digest hmac_sha256(std::span<const std::uint8_t> key,
+                             std::span<const std::uint8_t> msg) noexcept;
+    Sha256Digest hmac_sha256(std::string_view key, std::string_view msg) noexcept;
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

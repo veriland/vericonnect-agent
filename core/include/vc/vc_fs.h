@@ -1,6 +1,5 @@
 /*
  * vc_fs.h - portable filesystem operations (UTF-8 paths).
- * Implemented per platform.
  */
 #ifndef VC_FS_H
 #define VC_FS_H
@@ -8,41 +7,38 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-#if defined(_WIN32)
-#  define VC_PATH_SEP '\\'
-#else
-#  define VC_PATH_SEP '/'
-#endif
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
-bool vc_fs_file_exists(const char *path);
-bool vc_fs_dir_exists(const char *path);
-int  vc_fs_mkdir(const char *path);                 /* single level; OK if exists */
-int  vc_fs_remove_file(const char *path);
-int  vc_fs_move(const char *from, const char *to);  /* fails if to exists */
+namespace vc::fs
+{
+    bool file_exists(const std::string& path);
+    bool dir_exists(const std::string& path);
+    Status mkdir(const std::string& path); /* single level; OK if exists */
+    Status remove_file(const std::string& path);
+    Status move(const std::string& from, const std::string& to); /* fails if to exists */
 
-/* Read entire file. *out is vc_alloc'd (NUL terminated for convenience). */
-int vc_fs_read_all(const char *path, uint8_t **out, size_t *out_len);
+    /* Read an entire file into a byte buffer. */
+    Result<Bytes> read_all(const std::string& path);
 
-/* Write entire file (creates/truncates). */
-int vc_fs_write_all(const char *path, const void *data, size_t len);
+    /* Write an entire file (creates/truncates). */
+    Status write_all(const std::string& path, std::span<const std::uint8_t> data);
 
-/* List names of regular files (not directories) in dir.
- * Returns vc_alloc'd array of vc_alloc'd strings; caller frees with
- * vc_fs_list_free. count set to number of entries. */
-int  vc_fs_list_files(const char *dir, char ***names, size_t *count);
-void vc_fs_list_free(char **names, size_t count);
+    /* Names of regular files (not directories) in dir. */
+    Result<std::vector<std::string>> list_files(const std::string& dir);
 
-/* Join two path segments into a malloc'd string (vc_free). */
-char *vc_fs_join(const char *a, const char *b);
+    /* Join two path segments. */
+    std::string join(std::string_view a, std::string_view b);
 
-/* Directory containing the current executable (vc_free). */
-char *vc_fs_exe_dir(void);
+    /* Directory containing the current executable. */
+    std::optional<std::string> exe_dir();
+} // namespace vc::fs
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* __cplusplus */
 
 #endif

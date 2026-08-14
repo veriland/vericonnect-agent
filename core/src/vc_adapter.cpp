@@ -1,194 +1,172 @@
 #include "vc/vc_adapter.h"
 #include "vc/vc_fs.h"
 #include "vc/vc_json.h"
-#include "vc/vc_str.h"
 #include "vc/vc_log.h"
 #include "vc/vc_impersonate.h"
-#include <stdio.h>
 
+#include <cctype>
+#include <cstring>
+
+namespace vc
+{
+    namespace
+    {
 #if defined(_WIN32)
-#  define VC_ADAPTER_PREFIX "vc-adapter-"
-#  define VC_ADAPTER_EXT    ".dll"
+        constexpr const char* kAdapterExt = ".dll";
 #elif defined(__APPLE__)
-#  define VC_ADAPTER_PREFIX "libvc-adapter-"
-#  define VC_ADAPTER_EXT    ".dylib"
+        constexpr const char* kAdapterExt = ".dylib";
 #else
-#  define VC_ADAPTER_PREFIX "libvc-adapter-"
-#  define VC_ADAPTER_EXT    ".so"
+        constexpr const char* kAdapterExt = ".so";
 #endif
 
-static bool ends_with_ci(const char *s, const char *suffix)
-{
-    size_t ls = strlen(s), lf = strlen(suffix);
-    return ls >= lf && vc_stricmp(s + ls - lf, suffix) == 0;
-}
-
-static void extract_id(vc_adapter *ad)
-{
-    ad->id[0] = 0;
-    if (!ad->info) return;
-    const char *info = ad->info();
-    if (!info) return;
-    vc_json *root = vc_json_parse(info);
-    if (root) {
-        const char *id = vc_json_get_str(root, "id", NULL);
-        if (id) snprintf(ad->id, sizeof ad->id, "%s", id);
-        vc_json_free(root);
-    }
-}
-
-static int load_one(vc_adapter_registry *reg, const char *path)
-{
-    void *handle = vc_dynlib_open(path);
-    if (!handle) return VC_E_IO;
-
-    vc_adapter_run_fn  run = (vc_adapter_run_fn)vc_dynlib_sym(handle, "RunAdapterCommand");
-    vc_adapter_free_fn fr  = (vc_adapter_free_fn)vc_dynlib_sym(handle, "FreeAdapterString");
-    vc_adapter_info_fn nf  = (vc_adapter_info_fn)vc_dynlib_sym(handle, "GetAdapterInfo");
-    if (!run || !fr) {
-        vc_dynlib_close(handle);
-        return VC_E_PROTOCOL;
-    }
-
-    vc_adapter *ad = static_cast<vc_adapter*>(vc_alloc(sizeof *ad));
-    if (!ad) { vc_dynlib_close(handle); return VC_E_NOMEM; }
-    memset(ad, 0, sizeof *ad);
-    ad->handle = handle;
-    ad->run = run;
-    ad->free_str = fr;
-    ad->info = nf;
-    snprintf(ad->path, sizeof ad->path, "%s", path);
-    extract_id(ad);
-    if (!ad->id[0])
-        snprintf(ad->id, sizeof ad->id, "adapter%p", (void *)ad);
-
-    ad->next = reg->first;
-    reg->first = ad;
-    VC_INFO("Loaded adapter '%s' from %s", ad->id, path);
-    return VC_OK;
-}
-
-int vc_adapter_registry_load(vc_adapter_registry *reg, const char *dir)
-{
-    reg->first = NULL;
-    char **names = NULL;
-    size_t count = 0;
-    if (vc_fs_list_files(dir, &names, &count) != VC_OK)
-        return VC_E_NOT_FOUND;
-
-    int loaded = 0;
-    for (size_t i = 0; i < count; i++) {
-        const char *n = names[i];
-        if (!ends_with_ci(n, VC_ADAPTER_EXT)) continue;
-        /* accept any shared library exposing the adapter exports,
-         * regardless of its name prefix */
-        char *full = vc_fs_join(dir, n);
-        if (full) {
-            if (load_one(reg, full) == VC_OK) loaded++;
-            vc_free(full);
+        bool iends_with(std::string_view s, std::string_view suffix) noexcept
+        {
+            if (s.size() < suffix.size()) return false;
+            std::string_view tail = s.substr(s.size() - suffix.size());
+            for (std::size_t i = 0; i < tail.size(); i++)
+                if (std::tolower(static_cast<unsigned char>(tail[i])) !=
+                    std::tolower(static_cast<unsigned char>(suffix[i])))
+                    return false;
+            return true;
         }
-    }
-    vc_fs_list_free(names, count);
-    return loaded > 0 ? VC_OK : VC_E_NOT_FOUND;
-}
 
-void vc_adapter_registry_unload(vc_adapter_registry *reg)
-{
-    vc_adapter *ad = reg->first;
-    while (ad) {
-        vc_adapter *next = ad->next;
-        if (ad->handle) vc_dynlib_close(ad->handle);
-        vc_free(ad);
-        ad = next;
-    }
-    reg->first = NULL;
-}
-
-vc_adapter *vc_adapter_find(vc_adapter_registry *reg, const char *id)
-{
-    if (!id) return NULL;
-    for (vc_adapter *ad = reg->first; ad; ad = ad->next)
-        if (!vc_stricmp(ad->id, id)) return ad;
-    return NULL;
-}
-
-static char *json_error(int code, const char *desc)
-{
-    vc_json *root = vc_json_new_object();
-    vc_json_obj_set_num(root, "StatusCode", code);
-    vc_json_obj_set_str(root, "StatusDescription", desc);
-    char *s = vc_json_write(root);
-    vc_json_free(root);
-    return s ? s : vc_strdup("{\"StatusCode\":500}");
-}
-
-char *vc_adapter_dispatch(vc_adapter_registry *reg, const char *request_json)
-{
-    if (!request_json)
-        return json_error(400, "Empty request");
-
-    /* Parse once: route on "Adapter" and read optional "UserCredentials".
-     * `root` stays alive until after the adapter call, because the
-     * credential strings below point into it. */
-    vc_adapter *ad = NULL;
-    const char *imp_user = NULL, *imp_domain = NULL, *imp_pass = NULL;
-    vc_json *root = vc_json_parse(request_json);
-    if (root) {
-        const char *adapter_id = vc_json_get_str(root, "Adapter", NULL);
-        if (adapter_id) ad = vc_adapter_find(reg, adapter_id);
-
-        /* UserCredentials lives inside "Parameters" (matching the Delphi
-         * TFileSystemParams.UserCredentials); accept it at the top level
-         * too for backward compatibility. */
-        vc_json *params = vc_json_obj_get_ci(root, "Parameters");
-        vc_json *uc = params ? vc_json_obj_get_ci(params, "UserCredentials")
-                             : NULL;
-        if (!uc) uc = vc_json_obj_get_ci(root, "UserCredentials");
-        if (uc) {
-            imp_user   = vc_json_get_str(uc, "Username", NULL);
-            imp_domain = vc_json_get_str(uc, "Domain", NULL);
-            imp_pass   = vc_json_get_str(uc, "Password", "");
+        bool iequals(std::string_view a, std::string_view b) noexcept
+        {
+            if (a.size() != b.size()) return false;
+            for (std::size_t i = 0; i < a.size(); i++)
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i])))
+                    return false;
+            return true;
         }
-    }
-    if (!ad) ad = reg->first;   /* fall back to first loaded adapter */
-    if (!ad) {
-        vc_json_free(root);
-        return json_error(404, "No adapter available");
-    }
 
-    /* Optionally impersonate the requested user for just this command.
-     * Never log the password; imp_user (a name) is fine to log. */
-    vc_impersonation *imp = NULL;
-    if (imp_user && imp_user[0]) {
-        char *ierr = NULL;
-        int irc = vc_impersonate_begin(imp_user, imp_domain, imp_pass,
-                                       &imp, &ierr);
-        if (irc != VC_OK) {
-            VC_ERROR("Impersonation failed for user '%s': %s",
-                     imp_user, ierr ? ierr : "unknown error");
-            /* 501 when the platform can't do it, 403 for a rejected logon. */
-            char *e = json_error(irc == VC_E_UNSUPPORTED ? 501 : 403,
-                                 ierr ? ierr : "Impersonation failed");
-            vc_free(ierr);
-            vc_json_free(root);
-            return e;
+        std::string json_error(int code, std::string_view desc)
+        {
+            Json root = Json::object();
+            root.set("StatusCode", Json::number(code));
+            root.set("StatusDescription", Json::string(std::string(desc)));
+            return root.dump();
         }
-        VC_INFO("Impersonating user '%s' for this command", imp_user);
+    } // namespace
+
+    std::optional<Adapter> Adapter::load(const std::string& path)
+    {
+        std::optional<DynLib> lib = DynLib::open(path);
+        if (!lib) return std::nullopt;
+
+        auto run = reinterpret_cast<vc_adapter_run_fn>(lib->symbol("RunAdapterCommand"));
+        auto fr = reinterpret_cast<vc_adapter_free_fn>(lib->symbol("FreeAdapterString"));
+        auto info = reinterpret_cast<vc_adapter_info_fn>(lib->symbol("GetAdapterInfo"));
+        if (!run || !fr) return std::nullopt;
+
+        Adapter ad;
+        ad.lib_ = std::move(*lib);
+        ad.run_ = run;
+        ad.free_ = fr;
+        ad.info_ = info;
+        ad.path_ = path;
+
+        if (info)
+        {
+            if (const char* raw = info())
+            {
+                Result<Json> root = Json::parse(raw);
+                if (root) ad.id_ = std::string(root->get_str("id", ""));
+            }
+        }
+        if (ad.id_.empty()) ad.id_ = path;
+        return ad;
     }
 
-    char *raw = ad->run(request_json);
+    std::string Adapter::run(const std::string& request_json) const
+    {
+        char* raw = run_(request_json.c_str());
+        if (!raw) return {};
+        std::string result(raw);
+        free_(raw);
+        return result;
+    }
 
-    /* Revert before touching anything else, then release the parse tree
-     * (which owns the credential strings). */
-    vc_impersonate_end(imp);
-    vc_json_free(root);
+    Status AdapterRegistry::load(const std::string& dir)
+    {
+        Result<std::vector<std::string>> names = fs::list_files(dir);
+        if (!names) return std::unexpected(Error::NotFound);
 
-    if (!raw)
-        return json_error(500, "Adapter returned no result");
+        for (const std::string& n : *names)
+        {
+            if (!iends_with(n, kAdapterExt)) continue;
+            std::optional<Adapter> ad = Adapter::load(fs::join(dir, n));
+            if (ad)
+            {
+                log::message(log::Level::Info, "Loaded adapter '{}' from {}",
+                             ad->id(), ad->path());
+                adapters_.push_back(std::move(*ad));
+            }
+        }
+        return adapters_.empty() ? std::unexpected(Error::NotFound) : Status{};
+    }
 
-    /* Copy into a vc_alloc buffer so the host frees it uniformly, then
-     * release the adapter-owned buffer with its own allocator. */
-    char *copy = vc_strdup(raw);
-    ad->free_str(raw);
-    return copy ? copy : json_error(500, "Out of memory");
-}
+    const Adapter* AdapterRegistry::find(std::string_view id) const
+    {
+        for (const Adapter& ad : adapters_)
+            if (iequals(ad.id(), id)) return &ad;
+        return nullptr;
+    }
+
+    std::string AdapterRegistry::dispatch(const std::string& request_json)
+    {
+        /* Parse once: route on "Adapter" and read optional "UserCredentials". */
+        const Adapter* ad = nullptr;
+        std::string_view imp_user, imp_domain, imp_pass;
+
+        Result<Json> root = Json::parse(request_json);
+        if (root)
+        {
+            std::string_view adapter_id = root->get_str("Adapter", "");
+            if (!adapter_id.empty()) ad = find(adapter_id);
+
+            /* UserCredentials lives inside "Parameters"; accept it at the top
+         * level too for backward compatibility. */
+            const Json* params = root->find_ci("Parameters");
+            const Json* uc = params ? params->find_ci("UserCredentials") : nullptr;
+            if (!uc) uc = root->find_ci("UserCredentials");
+            if (uc)
+            {
+                imp_user = uc->get_str("Username", "");
+                imp_domain = uc->get_str("Domain", "");
+                imp_pass = uc->get_str("Password", "");
+            }
+        }
+        if (!ad)
+        {
+            if (adapters_.empty()) return json_error(404, "No adapter available");
+            ad = &adapters_.front();
+        }
+
+        /* Optionally impersonate the requested user for just this command. Never
+     * log the password; the user name is fine to log. */
+        std::optional<Impersonation> imp;
+        if (!imp_user.empty())
+        {
+            auto r = Impersonation::begin(imp_user, imp_domain, imp_pass);
+            if (!r)
+            {
+                log::message(log::Level::Error, "Impersonation failed for user '{}': {}",
+                             imp_user, r.error().message);
+                /* 501 when the platform can't do it, 403 for a rejected logon. */
+                return json_error(r.error().code == Error::Unsupported ? 501 : 403,
+                                  r.error().message);
+            }
+            imp = std::move(*r);
+            log::message(log::Level::Info, "Impersonating user '{}' for this command", imp_user);
+        }
+
+        std::string result = ad->run(request_json);
+
+        /* Revert before returning (RAII). */
+        imp.reset();
+
+        if (result.empty()) return json_error(500, "Adapter returned no result");
+        return result;
+    }
+} // namespace vc

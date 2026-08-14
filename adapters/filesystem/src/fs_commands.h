@@ -1,21 +1,26 @@
 /*
  * FileSystem adapter command handlers.
  *
- * Each takes the parsed request JSON (vc_json object with "Parameters")
- * and returns a malloc'd JSON result string (vc_free). The result
- * follows the VeriConnect contract: an object with StatusCode,
- * StatusDescription and, where relevant, a Data field.
+ * Each takes the parsed request JSON (object with "Parameters") and returns a
+ * JSON result string following the VeriConnect contract: an object with
+ * StatusCode, StatusDescription and, where relevant, a Data field.
  */
 #ifndef FS_COMMANDS_H
 #define FS_COMMANDS_H
 
 #include "vc/vc_json.h"
 
-char *fs_cmd_list_folder(const vc_json *req);
-char *fs_cmd_create_folder(const vc_json *req);
-char *fs_cmd_create_file(const vc_json *req);
-char *fs_cmd_read_file(const vc_json *req);
-char *fs_cmd_delete_file(const vc_json *req);
-char *fs_cmd_move_file(const vc_json *req);
+#include <string>
+
+namespace fs_cmd {
+
+std::string list_folder(const vc::Json &req);
+std::string create_folder(const vc::Json &req);
+std::string create_file(const vc::Json &req);
+std::string read_file(const vc::Json &req);
+std::string delete_file(const vc::Json &req);
+std::string move_file(const vc::Json &req);
+
+} // namespace fs_cmd
 
 #endif

@@ -8,46 +8,44 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef enum vc_log_level {
-    VC_LOG_TRACE = 0,
-    VC_LOG_DEBUG,
-    VC_LOG_INFO,
-    VC_LOG_SUCC,   /* success events, logged at INFO priority */
-    VC_LOG_WARN,
-    VC_LOG_ERROR
-} vc_log_level;
+#include <format>
+#include <string>
+#include <string_view>
+#include <utility>
 
-typedef struct vc_log_config {
-    vc_log_level level;
-    bool         enabled;
-    bool         console;           /* echo to stdout                 */
-    bool         show_event_type;   /* [INFO] tags                    */
-    bool         time_precision;    /* milliseconds in timestamps     */
-    char         file_path[512];    /* empty = no file logging        */
-    int          max_file_size_mb;  /* rotate threshold               */
-    int          max_rotate_files;
-} vc_log_config;
+namespace vc::log
+{
+    enum class Level { Trace = 0, Debug, Info, Succ /* logged at Info */, Warn, Error };
 
-void vc_log_config_defaults(vc_log_config *cfg);
-int  vc_log_init(const vc_log_config *cfg);
-void vc_log_shutdown(void);
+    struct Config
+    {
+        Level level = Level::Info;
+        bool enabled = true;
+        bool console = true; /* echo to stdout             */
+        bool show_event_type = true; /* [INFO] tags                */
+        bool time_precision = true; /* milliseconds in timestamps */
+        std::string file_path; /* empty = no file logging    */
+        int max_file_size_mb = 10;
+        int max_rotate_files = 10;
+    };
 
-vc_log_level vc_log_level_from_str(const char *s); /* "LOG_DEBUG" etc. */
+    Status init(const Config& cfg);
+    void shutdown();
 
-void vc_log(vc_log_level lvl, const char *fmt, ...);
+    Level level_from_str(std::string_view s); /* "LOG_DEBUG" etc. */
 
-#define VC_TRACE(...) vc_log(VC_LOG_TRACE, __VA_ARGS__)
-#define VC_DEBUG(...) vc_log(VC_LOG_DEBUG, __VA_ARGS__)
-#define VC_INFO(...)  vc_log(VC_LOG_INFO,  __VA_ARGS__)
-#define VC_SUCC(...)  vc_log(VC_LOG_SUCC,  __VA_ARGS__)
-#define VC_WARN(...)  vc_log(VC_LOG_WARN,  __VA_ARGS__)
-#define VC_ERROR(...) vc_log(VC_LOG_ERROR, __VA_ARGS__)
+    /* Emit a preformatted message. */
+    void write(Level lvl, std::string_view msg);
 
-#ifdef __cplusplus
-}
-#endif
+    /* Emit a std::format-style message. */
+    template <class... Args>
+    void message(Level lvl, std::format_string<Args...> fmt, Args&&... args)
+    {
+        write(lvl, std::vformat(fmt.get(), std::make_format_args(args...)));
+    }
+} // namespace vc::log
+
+#endif /* __cplusplus */
 
 #endif
