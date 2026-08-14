@@ -49,8 +49,10 @@ jobs:
           elif echo "$labels" | grep -qx 'release:minor'; then kind=minor
           elif echo "$labels" | grep -qx 'release:skip'; then kind=skip
           fi
-          # Explicit opt-out via commit message.
-          if git log -1 --pretty=%B "${{ github.sha }}" | grep -qi '\[skip release\]'; then
+          # Explicit opt-out via commit subject only. Using the full body
+          # (%B) would let the phrase appear in a squashed commit's
+          # description and accidentally skip the release.
+          if git log -1 --pretty=%s "${{ github.sha }}" | grep -qi '\[skip release\]'; then
             kind=skip
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
