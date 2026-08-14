@@ -220,7 +220,7 @@ or service that competes with a commercial offering of the Licensor). Each
 version automatically converts to the Apache License 2.0 on the second
 anniversary of its release.
 
-For commercial licensing outside these terms, contact eralpe@veriland.co.uk.
+For commercial licensing outside these terms, contact legal@veriland.co.uk.
 
 ## Contributing
 
