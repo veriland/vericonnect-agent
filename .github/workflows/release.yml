@@ -97,7 +97,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             arch: win-x64
             preset: vs2022
             build-flags: --config Release
@@ -136,7 +136,7 @@ jobs:
           grep -E '^set\(VC_VER_' CMakeLists.txt
 
       - name: Configure (Windows / MSVC)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: cmake --preset ${{ matrix.preset }}
 
       - name: Configure (Linux / GCC 13)
