@@ -16,7 +16,7 @@
 namespace vc
 {
     /* A connected TCP client socket. Move-only; the descriptor is closed on
- * destruction. */
+     * destruction. */
     class Socket
     {
     public:
@@ -37,16 +37,17 @@ namespace vc
         Result<std::size_t> send(std::span<const std::uint8_t> data);
 
         /* Returns bytes read (>0), 0 on orderly close, or an error
-     * (Error::Timeout if nothing arrived within timeout_ms). */
+         * (Error::Timeout if nothing arrived within timeout_ms). */
         Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
-        bool valid() const noexcept { return fd_ >= 0; }
+        bool valid() const noexcept
+        {
+            return fd_ >= 0;
+        }
         void close() noexcept;
 
     private:
-        explicit Socket(std::intptr_t fd) noexcept : fd_(fd)
-        {
-        }
+        explicit Socket(std::intptr_t fd) noexcept : fd_(fd) {}
 
         std::intptr_t fd_ = -1;
     };

@@ -41,8 +41,8 @@ namespace vc::agent
         /* Relay -> adapter bridge. */
         bool on_request(AdapterRegistry& registry, const RelayRequest& req, RelayResponse& resp)
         {
-            log::message(log::Level::Info, "REQUEST [{}] {} {} ({} byte body)",
-                         req.id, req.method, req.target, req.body.size());
+            log::message(log::Level::Info, "REQUEST [{}] {} {} ({} byte body)", req.id, req.method,
+                         req.target, req.body.size());
 
             /* The command JSON is the request body (UTF-8). */
             std::string result = registry.dispatch(std::string(as_view(req.body)));
@@ -88,9 +88,8 @@ namespace vc::agent
 
     Status run(const Options& opts, const std::function<bool()>& stop_requested)
     {
-        std::string settings_path = opts.settings_path.empty()
-                                        ? Settings::default_path()
-                                        : opts.settings_path;
+        std::string settings_path =
+            opts.settings_path.empty() ? Settings::default_path() : opts.settings_path;
 
         Result<Settings> loaded = Settings::load(settings_path);
         Settings settings = loaded.value_or(Settings{});
@@ -125,15 +124,14 @@ namespace vc::agent
 
         RelayCallbacks cb;
         cb.on_request = [&registry](const RelayRequest& req, RelayResponse& resp)
-        {
-            return on_request(registry, req, resp);
-        };
+        { return on_request(registry, req, resp); };
         cb.on_event = on_event;
 
         Status rc;
         if (settings.relay.namespace_host.empty() || settings.relay.hybrid_connection.empty())
         {
-            log::message(log::Level::Error, "Connection settings incomplete; cannot start listener");
+            log::message(log::Level::Error,
+                         "Connection settings incomplete; cannot start listener");
             rc = std::unexpected(Error::InvalidArg);
         }
         else

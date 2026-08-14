@@ -20,15 +20,21 @@
 namespace vc
 {
     /* A JSON value with value semantics (copyable, movable). Containers own
- * their children. */
+     * their children. */
     class Json
     {
     public:
-        enum class Type { Null, Bool, Number, String, Array, Object };
-
-        Json() noexcept : type_(Type::Null)
+        enum class Type
         {
-        }
+            Null,
+            Bool,
+            Number,
+            String,
+            Array,
+            Object
+        };
+
+        Json() noexcept : type_(Type::Null) {}
 
         static Json boolean(bool b);
         static Json number(double n);
@@ -39,20 +45,41 @@ namespace vc
         /* Parse a complete JSON document (trailing junk is rejected). */
         static Result<Json> parse(std::string_view text);
 
-        Type type() const noexcept { return type_; }
-        bool is_null() const noexcept { return type_ == Type::Null; }
-        bool is_bool() const noexcept { return type_ == Type::Bool; }
-        bool is_number() const noexcept { return type_ == Type::Number; }
-        bool is_string() const noexcept { return type_ == Type::String; }
-        bool is_array() const noexcept { return type_ == Type::Array; }
-        bool is_object() const noexcept { return type_ == Type::Object; }
+        Type type() const noexcept
+        {
+            return type_;
+        }
+        bool is_null() const noexcept
+        {
+            return type_ == Type::Null;
+        }
+        bool is_bool() const noexcept
+        {
+            return type_ == Type::Bool;
+        }
+        bool is_number() const noexcept
+        {
+            return type_ == Type::Number;
+        }
+        bool is_string() const noexcept
+        {
+            return type_ == Type::String;
+        }
+        bool is_array() const noexcept
+        {
+            return type_ == Type::Array;
+        }
+        bool is_object() const noexcept
+        {
+            return type_ == Type::Object;
+        }
 
         bool as_bool(bool def = false) const noexcept;
         double as_number(double def = 0) const noexcept;
         std::string_view as_string(std::string_view def = "") const noexcept;
 
         /* Object member lookup. Returns nullptr if absent or not an object. */
-        const Json* find(std::string_view key) const noexcept; /* case-sensitive   */
+        const Json* find(std::string_view key) const noexcept;    /* case-sensitive   */
         const Json* find_ci(std::string_view key) const noexcept; /* case-insensitive */
 
         /* Convenience typed getters (case-insensitive, returning def on mismatch). */
@@ -63,11 +90,17 @@ namespace vc
         /* Number of elements (array) or members (object). */
         std::size_t size() const noexcept;
 
-        const std::vector<Json>& elements() const noexcept { return arr_; }
-        const std::vector<std::pair<std::string, Json>>& members() const noexcept { return obj_; }
+        const std::vector<Json>& elements() const noexcept
+        {
+            return arr_;
+        }
+        const std::vector<std::pair<std::string, Json>>& members() const noexcept
+        {
+            return obj_;
+        }
 
         /* Builders (chainable). set() appends an object member; add() an array
-     * element. */
+         * element. */
         Json& set(std::string key, Json value);
         Json& add(Json value);
 

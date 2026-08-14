@@ -30,9 +30,9 @@ namespace vc::http
         std::string_view host;
         int port = 443;
         std::string_view path_and_query;
-        std::string_view extra_headers; /* "H: v\r\n" lines, optional */
+        std::string_view extra_headers;     /* "H: v\r\n" lines, optional */
         std::span<const std::uint8_t> body; /* may be empty               */
-        std::string_view content_type; /* default application/json   */
+        std::string_view content_type;      /* default application/json   */
         int timeout_ms = 30000;
     };
 

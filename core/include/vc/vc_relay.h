@@ -37,7 +37,7 @@ namespace vc
     {
         std::string_view id;
         std::string_view method;
-        std::string_view target; /* requestTarget */
+        std::string_view target;       /* requestTarget */
         std::string_view headers_json; /* serialized requestHeaders, or empty */
         std::span<const std::uint8_t> body;
     };
@@ -59,9 +59,9 @@ namespace vc
     };
 
     /*
- * Run the listener loop until stop_requested() returns true. Blocking;
- * reconnects on failure. Returns success on a requested stop.
- */
+     * Run the listener loop until stop_requested() returns true. Blocking;
+     * reconnects on failure. Returns success on a requested stop.
+     */
     Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
                         const std::function<bool()>& stop_requested);
 } // namespace vc

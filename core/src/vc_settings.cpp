@@ -18,12 +18,18 @@ namespace vc
         {
             switch (l)
             {
-            case log::Level::Trace: return "LOG_TRACE";
-            case log::Level::Debug: return "LOG_DEBUG";
-            case log::Level::Info: return "LOG_INFO";
-            case log::Level::Succ: return "LOG_INFO";
-            case log::Level::Warn: return "LOG_WARN";
-            case log::Level::Error: return "LOG_ERROR";
+            case log::Level::Trace:
+                return "LOG_TRACE";
+            case log::Level::Debug:
+                return "LOG_DEBUG";
+            case log::Level::Info:
+                return "LOG_INFO";
+            case log::Level::Succ:
+                return "LOG_INFO";
+            case log::Level::Warn:
+                return "LOG_WARN";
+            case log::Level::Error:
+                return "LOG_ERROR";
             }
             return "LOG_INFO";
         }

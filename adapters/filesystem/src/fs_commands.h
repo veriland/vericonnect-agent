@@ -12,14 +12,15 @@
 
 #include <string>
 
-namespace fs_cmd {
+namespace fs_cmd
+{
 
-std::string list_folder(const vc::Json &req);
-std::string create_folder(const vc::Json &req);
-std::string create_file(const vc::Json &req);
-std::string read_file(const vc::Json &req);
-std::string delete_file(const vc::Json &req);
-std::string move_file(const vc::Json &req);
+    std::string list_folder(const vc::Json& req);
+    std::string create_folder(const vc::Json& req);
+    std::string create_file(const vc::Json& req);
+    std::string read_file(const vc::Json& req);
+    std::string delete_file(const vc::Json& req);
+    std::string move_file(const vc::Json& req);
 
 } // namespace fs_cmd
 

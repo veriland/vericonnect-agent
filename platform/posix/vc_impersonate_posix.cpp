@@ -21,21 +21,18 @@ namespace vc
 
     Impersonation::Impersonation() noexcept = default;
 
-    Impersonation::Impersonation(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
-    {
-    }
+    Impersonation::Impersonation(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     Impersonation::~Impersonation() = default;
     Impersonation::Impersonation(Impersonation&&) noexcept = default;
     Impersonation& Impersonation::operator=(Impersonation&&) noexcept = default;
 
-    std::expected<Impersonation, ImpersonationError>
-    Impersonation::begin(std::string_view, std::string_view, std::string_view)
+    std::expected<Impersonation, ImpersonationError> Impersonation::begin(std::string_view,
+                                                                          std::string_view,
+                                                                          std::string_view)
     {
         return std::unexpected(ImpersonationError{
             Error::Unsupported,
-            "Impersonation via UserCredentials is not supported on this platform"
-        });
+            "Impersonation via UserCredentials is not supported on this platform"});
     }
 } // namespace vc
-

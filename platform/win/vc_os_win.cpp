@@ -7,7 +7,10 @@
 
 namespace vc::os
 {
-    void sleep_ms(unsigned ms) { Sleep(ms); }
+    void sleep_ms(unsigned ms)
+    {
+        Sleep(ms);
+    }
 
     std::uint64_t monotonic_ms() noexcept
     {

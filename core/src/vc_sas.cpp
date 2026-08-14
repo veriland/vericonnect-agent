@@ -10,8 +10,7 @@
 namespace vc
 {
     std::string sas_token(std::string_view namespace_host, std::string_view entity_path,
-                          std::string_view key_name, std::string_view key,
-                          unsigned ttl_seconds)
+                          std::string_view key_name, std::string_view key, unsigned ttl_seconds)
     {
         if (namespace_host.empty() || entity_path.empty() || key_name.empty() || key.empty())
             return {};
@@ -22,7 +21,8 @@ namespace vc
         uri.append(namespace_host);
         uri += '/';
         uri.append(entity_path);
-        for (char& c : uri) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (char& c : uri)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
         std::string enc_uri = url_encode(uri);
 
@@ -34,6 +34,6 @@ namespace vc
         std::string sig_enc = url_encode(base64_encode(std::span<const std::uint8_t>(digest)));
 
         return "SharedAccessSignature sr=" + enc_uri + "&sig=" + sig_enc +
-            "&se=" + std::to_string(expiry) + "&skn=" + std::string(key_name);
+               "&se=" + std::to_string(expiry) + "&skn=" + std::string(key_name);
     }
 } // namespace vc

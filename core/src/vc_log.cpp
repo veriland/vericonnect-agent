@@ -7,10 +7,10 @@
 #include <ctime>
 
 #if defined(_WIN32)
-#  include <windows.h>
-#  include <sys/timeb.h>
+#include <windows.h>
+#include <sys/timeb.h>
 #else
-#  include <sys/time.h>
+#include <sys/time.h>
 #endif
 
 namespace vc::log
@@ -25,12 +25,18 @@ namespace vc::log
         {
             switch (l)
             {
-            case Level::Trace: return "TRACE";
-            case Level::Debug: return "DEBUG";
-            case Level::Info: return "INFO ";
-            case Level::Succ: return "SUCC ";
-            case Level::Warn: return "WARN ";
-            case Level::Error: return "ERROR";
+            case Level::Trace:
+                return "TRACE";
+            case Level::Debug:
+                return "DEBUG";
+            case Level::Info:
+                return "INFO ";
+            case Level::Succ:
+                return "SUCC ";
+            case Level::Warn:
+                return "WARN ";
+            case Level::Error:
+                return "ERROR";
             }
             return "?????";
         }
@@ -63,12 +69,11 @@ namespace vc::log
             char buf[40];
             if (g_cfg.time_precision)
                 std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-                              tmv.tm_hour, tmv.tm_min, tmv.tm_sec, ms);
+                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
+                              tmv.tm_min, tmv.tm_sec, ms);
             else
-                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d",
-                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
-                              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d", tmv.tm_year + 1900,
+                              tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
             return buf;
         }
 
@@ -150,8 +155,7 @@ namespace vc::log
                 std::printf("%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
                             static_cast<int>(msg.size()), msg.data());
             else
-                std::printf("%s %.*s\n", ts.c_str(),
-                            static_cast<int>(msg.size()), msg.data());
+                std::printf("%s %.*s\n", ts.c_str(), static_cast<int>(msg.size()), msg.data());
             std::fflush(stdout);
         }
         if (g_file)
@@ -160,11 +164,10 @@ namespace vc::log
                 std::fprintf(g_file, "%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
                              static_cast<int>(msg.size()), msg.data());
             else
-                std::fprintf(g_file, "%s %.*s\n", ts.c_str(),
-                             static_cast<int>(msg.size()), msg.data());
+                std::fprintf(g_file, "%s %.*s\n", ts.c_str(), static_cast<int>(msg.size()),
+                             msg.data());
             std::fflush(g_file);
             rotate_if_needed();
         }
     }
 } // namespace vc::log
-

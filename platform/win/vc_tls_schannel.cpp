@@ -37,12 +37,10 @@ namespace vc
         bool have_ctx = false;
         SecPkgContext_StreamSizes sizes{};
         Bytes plain; /* decrypted plaintext not yet consumed by caller */
-        Bytes enc; /* raw ciphertext received but not yet decrypted  */
+        Bytes enc;   /* raw ciphertext received but not yet decrypted  */
         bool closed = false;
 
-        explicit Impl(Socket s) noexcept : sock(std::move(s))
-        {
-        }
+        explicit Impl(Socket s) noexcept : sock(std::move(s)) {}
 
         ~Impl()
         {
@@ -51,7 +49,7 @@ namespace vc
         }
 
         /* Read some ciphertext into enc. Returns bytes read (>0), 0 on close, or
-     * an error. */
+         * an error. */
         Result<std::size_t> recv_some(int timeout_ms)
         {
             std::uint8_t tmp[8192];
@@ -65,10 +63,9 @@ namespace vc
 
     Status Tls::Impl::handshake(const std::string& hostname, int timeout_ms)
     {
-        DWORD flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT |
-            ISC_REQ_CONFIDENTIALITY | ISC_REQ_EXTENDED_ERROR |
-            ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM |
-            ISC_REQ_USE_SUPPLIED_CREDS;
+        DWORD flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY |
+                      ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM |
+                      ISC_REQ_USE_SUPPLIED_CREDS;
         DWORD out_flags = 0;
         bool first = true;
 
@@ -109,13 +106,12 @@ namespace vc
             SecBufferDesc out_desc{SECBUFFER_VERSION, 1, out_buf};
 
             SECURITY_STATUS ss = InitializeSecurityContextA(
-                &cred, first ? nullptr : &ctx, first ? target.data() : nullptr,
-                flags, 0, 0, first ? nullptr : &in_desc, 0,
-                first ? &ctx : nullptr, &out_desc, &out_flags, nullptr);
+                &cred, first ? nullptr : &ctx, first ? target.data() : nullptr, flags, 0, 0,
+                first ? nullptr : &in_desc, 0, first ? &ctx : nullptr, &out_desc, &out_flags,
+                nullptr);
             first = false;
-            if (!have_ctx &&
-                (ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED ||
-                    ss == SEC_E_INCOMPLETE_MESSAGE || FAILED(ss)))
+            if (!have_ctx && (ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED ||
+                              ss == SEC_E_INCOMPLETE_MESSAGE || FAILED(ss)))
                 have_ctx = true;
 
             if (out_buf[0].cbBuffer > 0 && out_buf[0].pvBuffer)
@@ -152,9 +148,7 @@ namespace vc
 
     Tls::Tls() noexcept = default;
 
-    Tls::Tls(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
-    {
-    }
+    Tls::Tls(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     Tls::~Tls() = default;
     Tls::Tls(Tls&&) noexcept = default;
@@ -166,12 +160,12 @@ namespace vc
 
         SCHANNEL_CRED sc{};
         sc.dwVersion = SCHANNEL_CRED_VERSION;
-        sc.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS |
-            SCH_USE_STRONG_CRYPTO;
+        sc.dwFlags =
+            SCH_CRED_AUTO_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS | SCH_USE_STRONG_CRYPTO;
 
-        SECURITY_STATUS ss = AcquireCredentialsHandleA(
-            nullptr, const_cast<LPSTR>(UNISP_NAME_A), SECPKG_CRED_OUTBOUND, nullptr, &sc,
-            nullptr, nullptr, &impl->cred, nullptr);
+        SECURITY_STATUS ss = AcquireCredentialsHandleA(nullptr, const_cast<LPSTR>(UNISP_NAME_A),
+                                                       SECPKG_CRED_OUTBOUND, nullptr, &sc, nullptr,
+                                                       nullptr, &impl->cred, nullptr);
         if (ss != SEC_E_OK) return std::unexpected(Error::Tls);
         impl->have_cred = true;
 
@@ -257,8 +251,10 @@ namespace vc
                     SecBuffer *data_buf = nullptr, *extra_buf = nullptr;
                     for (int i = 0; i < 4; i++)
                     {
-                        if (bufs[i].BufferType == SECBUFFER_DATA && !data_buf) data_buf = &bufs[i];
-                        else if (bufs[i].BufferType == SECBUFFER_EXTRA && !extra_buf) extra_buf = &bufs[i];
+                        if (bufs[i].BufferType == SECBUFFER_DATA && !data_buf)
+                            data_buf = &bufs[i];
+                        else if (bufs[i].BufferType == SECBUFFER_EXTRA && !extra_buf)
+                            extra_buf = &bufs[i];
                     }
                     if (data_buf && data_buf->cbBuffer > 0)
                     {
@@ -292,7 +288,8 @@ namespace vc
             }
 
             std::uint64_t now = os::monotonic_ms();
-            int wait = timeout_ms < 0 ? -1 : (now >= deadline ? 0 : static_cast<int>(deadline - now));
+            int wait =
+                timeout_ms < 0 ? -1 : (now >= deadline ? 0 : static_cast<int>(deadline - now));
             if (timeout_ms >= 0 && wait == 0 && impl_->enc.empty())
                 return std::unexpected(Error::Timeout);
             auto r = impl_->recv_some(wait < 0 ? 60000 : wait);
@@ -313,5 +310,8 @@ namespace vc
         }
     }
 
-    void Tls::close() { impl_.reset(); }
+    void Tls::close()
+    {
+        impl_.reset();
+    }
 } // namespace vc

@@ -23,15 +23,15 @@ namespace vc::http
         }
 
         /* Return the value of header `name` in a raw header block, or nullopt. */
-        std::optional<std::string_view> header_value(std::string_view headers, std::string_view name)
+        std::optional<std::string_view> header_value(std::string_view headers,
+                                                     std::string_view name)
         {
             std::size_t pos = 0;
             while (pos < headers.size())
             {
                 std::size_t eol = headers.find("\r\n", pos);
-                std::string_view line = headers.substr(pos, eol == std::string_view::npos
-                                                                ? std::string_view::npos
-                                                                : eol - pos);
+                std::string_view line = headers.substr(
+                    pos, eol == std::string_view::npos ? std::string_view::npos : eol - pos);
                 if (istarts_with(line, name) && line.size() > name.size() &&
                     line[name.size()] == ':')
                 {
@@ -46,7 +46,8 @@ namespace vc::http
             return std::nullopt;
         }
 
-        bool header_contains(std::string_view headers, std::string_view name, std::string_view needle)
+        bool header_contains(std::string_view headers, std::string_view name,
+                             std::string_view needle)
         {
             std::optional<std::string_view> v = header_value(headers, name);
             if (!v) return false;
@@ -94,8 +95,12 @@ namespace vc::http
         if (!tls) return std::unexpected(Error::Tls);
 
         std::string request_head;
-        request_head.append(req.method).append(" ").append(req.path_and_query)
-                    .append(" HTTP/1.1\r\nHost: ").append(req.host).append("\r\n");
+        request_head.append(req.method)
+            .append(" ")
+            .append(req.path_and_query)
+            .append(" HTTP/1.1\r\nHost: ")
+            .append(req.host)
+            .append("\r\n");
         if (!req.body.empty())
         {
             request_head += "Content-Length: " + std::to_string(req.body.size()) + "\r\n";
@@ -107,10 +112,9 @@ namespace vc::http
         request_head += "Connection: close\r\n\r\n";
 
         if (!tls->send(std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(request_head.data()), request_head.size())))
+                reinterpret_cast<const std::uint8_t*>(request_head.data()), request_head.size())))
             return std::unexpected(Error::Io);
-        if (!req.body.empty() && !tls->send(req.body))
-            return std::unexpected(Error::Io);
+        if (!req.body.empty() && !tls->send(req.body)) return std::unexpected(Error::Io);
 
         /* Read until close (Connection: close) or Content-Length satisfied. */
         std::string in;
@@ -168,4 +172,3 @@ namespace vc::http
         return resp;
     }
 } // namespace vc::http
-

@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 #if defined(__APPLE__)
-#  include <mach-o/dyld.h>
+#include <mach-o/dyld.h>
 #endif
 
 namespace vc::fs
@@ -29,4 +29,3 @@ namespace vc::fs
         return p;
     }
 } // namespace vc::fs
-

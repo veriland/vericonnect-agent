@@ -19,7 +19,7 @@ namespace vc
     std::string base64_encode(std::string_view s);
 
     /* Decode a base64 string. Whitespace is ignored; returns nullopt on invalid
- * input. */
+     * input. */
     std::optional<Bytes> base64_decode(std::string_view text);
 } // namespace vc
 

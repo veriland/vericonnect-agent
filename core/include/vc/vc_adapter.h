@@ -20,24 +20,25 @@
  * Adapter ABI (permanent C linkage; adapters resolve these by plain name).
  * ---------------------------------------------------------------------- */
 #if defined(_WIN32)
-#  define VC_ADAPTER_EXPORT_LINKAGE __declspec(dllexport)
+#define VC_ADAPTER_EXPORT_LINKAGE __declspec(dllexport)
 #else
-#  define VC_ADAPTER_EXPORT_LINKAGE __attribute__((visibility("default")))
+#define VC_ADAPTER_EXPORT_LINKAGE __attribute__((visibility("default")))
 #endif
 
 #ifdef __cplusplus
-#  define VC_ADAPTER_EXPORT extern "C" VC_ADAPTER_EXPORT_LINKAGE
+#define VC_ADAPTER_EXPORT extern "C" VC_ADAPTER_EXPORT_LINKAGE
 #else
-#  define VC_ADAPTER_EXPORT VC_ADAPTER_EXPORT_LINKAGE
+#define VC_ADAPTER_EXPORT VC_ADAPTER_EXPORT_LINKAGE
 #endif
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-typedef char* (*vc_adapter_run_fn)(const char* request_json);
-typedef void (*vc_adapter_free_fn)(char* p);
-typedef const char* (*vc_adapter_info_fn)(void);
+    typedef char* (*vc_adapter_run_fn)(const char* request_json);
+    typedef void (*vc_adapter_free_fn)(char* p);
+    typedef const char* (*vc_adapter_info_fn)(void);
 
 #ifdef __cplusplus
 }
@@ -68,12 +69,13 @@ namespace vc
 
         static std::optional<DynLib> open(const std::string& path);
         void* symbol(const char* name) const;
-        explicit operator bool() const noexcept { return handle_ != nullptr; }
+        explicit operator bool() const noexcept
+        {
+            return handle_ != nullptr;
+        }
 
     private:
-        explicit DynLib(void* handle) noexcept : handle_(handle)
-        {
-        }
+        explicit DynLib(void* handle) noexcept : handle_(handle) {}
 
         void* handle_ = nullptr;
     };
@@ -88,8 +90,14 @@ namespace vc
         /* Load from a shared library; nullopt if it lacks the adapter exports. */
         static std::optional<Adapter> load(const std::string& path);
 
-        const std::string& id() const noexcept { return id_; }
-        const std::string& path() const noexcept { return path_; }
+        const std::string& id() const noexcept
+        {
+            return id_;
+        }
+        const std::string& path() const noexcept
+        {
+            return path_;
+        }
 
         /* Invoke the adapter; returns its JSON result (empty if it returned null). */
         std::string run(const std::string& request_json) const;
@@ -118,7 +126,10 @@ namespace vc
          * Returns a JSON result; never empty. */
         std::string dispatch(const std::string& request_json);
 
-        bool empty() const noexcept { return adapters_.empty(); }
+        bool empty() const noexcept
+        {
+            return adapters_.empty();
+        }
 
     private:
         std::vector<Adapter> adapters_;

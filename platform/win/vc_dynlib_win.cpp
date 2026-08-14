@@ -18,9 +18,15 @@ namespace vc
         }
     } // namespace
 
-    DynLib::~DynLib() { if (handle_) FreeLibrary(static_cast<HMODULE>(handle_)); }
+    DynLib::~DynLib()
+    {
+        if (handle_) FreeLibrary(static_cast<HMODULE>(handle_));
+    }
 
-    DynLib::DynLib(DynLib&& other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
+    DynLib::DynLib(DynLib&& other) noexcept : handle_(other.handle_)
+    {
+        other.handle_ = nullptr;
+    }
 
     DynLib& DynLib::operator=(DynLib&& other) noexcept
     {

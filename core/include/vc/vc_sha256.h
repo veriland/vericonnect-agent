@@ -21,7 +21,10 @@ namespace vc
     class Sha256
     {
     public:
-        Sha256() noexcept { reset(); }
+        Sha256() noexcept
+        {
+            reset();
+        }
 
         void reset() noexcept;
         Sha256& update(std::span<const std::uint8_t> data) noexcept;

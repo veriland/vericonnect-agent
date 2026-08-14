@@ -63,8 +63,8 @@ namespace vc
 
             std::string make_token()
             {
-                return sas_token(cfg_.namespace_host, cfg_.hybrid_connection,
-                                 cfg_.key_name, cfg_.key, ttl_);
+                return sas_token(cfg_.namespace_host, cfg_.hybrid_connection, cfg_.key_name,
+                                 cfg_.key, ttl_);
             }
 
             Status ctrl_connect();
@@ -93,10 +93,10 @@ namespace vc
             if (token.empty()) return std::unexpected(Error::Fail);
 
             std::string path = "/$hc/" + cfg_.hybrid_connection +
-                "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
+                               "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
 
-            Result<WebSocket> ws = WebSocket::connect(cfg_.namespace_host, 443, path, "",
-                                                      kConnectTimeout);
+            Result<WebSocket> ws =
+                WebSocket::connect(cfg_.namespace_host, 443, path, "", kConnectTimeout);
             if (!ws) return std::unexpected(Error::Io);
             ctrl_ = std::move(*ws);
 
@@ -118,7 +118,8 @@ namespace vc
 
             if (ctrl_->send(WebSocket::MsgType::Text, as_bytes(msg)))
             {
-                token_renew_at_ = os::monotonic_ms() + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
+                token_renew_at_ =
+                    os::monotonic_ms() + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
                 emit("TOKEN_RENEWED", 0, "SAS token renewed");
             }
         }
@@ -132,8 +133,8 @@ namespace vc
             if (!resp.status_desc.empty())
                 r.set("statusDescription", Json::string(resp.status_desc));
             Json hdrs = Json::object();
-            hdrs.set("Content-Type",
-                     Json::string(resp.content_type.empty() ? "application/json" : resp.content_type));
+            hdrs.set("Content-Type", Json::string(resp.content_type.empty() ? "application/json"
+                                                                            : resp.content_type));
             r.set("responseHeaders", std::move(hdrs));
             r.set("body", Json::boolean(has_body));
 
@@ -150,8 +151,7 @@ namespace vc
 
             Status rc = ws.send(WebSocket::MsgType::Text, as_bytes(text));
             if (!rc) return rc;
-            if (has_body)
-                rc = ws.send(WebSocket::MsgType::Binary, resp.body);
+            if (has_body) rc = ws.send(WebSocket::MsgType::Binary, resp.body);
             return rc;
         }
 
@@ -203,7 +203,7 @@ namespace vc
             bool has_body = req_node.get_bool("body", false);
 
             /* Rendezvous-only offer: no method on the control message; the full
-     * request is delivered on the rendezvous connection. */
+             * request is delivered on the rendezvous connection. */
             if (on_control && !has_method)
             {
                 if (!has_address)
@@ -264,7 +264,7 @@ namespace vc
             }
 
             /* Send the response: control channel for small bodies, rendezvous for big
-     * ones (the control channel caps messages at 64 KB). */
+             * ones (the control channel caps messages at 64 KB). */
             Status src;
             std::string address = has_address ? std::string(addr_node->as_string()) : std::string();
             if (on_control && resp.body.size() > kCtrlBodyMax && has_address)
@@ -352,11 +352,11 @@ namespace vc
                     }
                     if (m->type == WebSocket::MsgType::Close)
                     {
-                        emit("DISCONNECTED", static_cast<int>(Error::Closed), "control channel lost");
+                        emit("DISCONNECTED", static_cast<int>(Error::Closed),
+                             "control channel lost");
                         break;
                     }
-                    if (m->type == WebSocket::MsgType::Text)
-                        handle_control_message(m->payload);
+                    if (m->type == WebSocket::MsgType::Text) handle_control_message(m->payload);
                 }
 
                 if (ctrl_)
@@ -381,4 +381,3 @@ namespace vc
         return listener.run(stop_requested);
     }
 } // namespace vc
-

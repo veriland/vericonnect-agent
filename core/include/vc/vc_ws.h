@@ -21,7 +21,12 @@ namespace vc
     class WebSocket
     {
     public:
-        enum class MsgType { Text = 1, Binary = 2, Close = 8 };
+        enum class MsgType
+        {
+            Text = 1,
+            Binary = 2,
+            Close = 8
+        };
 
         struct Message
         {
@@ -36,11 +41,10 @@ namespace vc
         WebSocket& operator=(const WebSocket&) = delete;
 
         /* Connect + upgrade. path_and_query e.g. "/$hc/name?sb-hc-action=listen".
-     * extra_headers: optional "Header: value\r\n" lines. */
+         * extra_headers: optional "Header: value\r\n" lines. */
         static Result<WebSocket> connect(const std::string& host, int port,
                                          const std::string& path_and_query,
-                                         std::string_view extra_headers,
-                                         int timeout_ms);
+                                         std::string_view extra_headers, int timeout_ms);
 
         /* Send one complete message (auto-fragments large payloads). */
         Status send(MsgType type, std::span<const std::uint8_t> data);
@@ -48,19 +52,20 @@ namespace vc
         Status send_close(std::uint16_t code);
 
         /*
-     * Receive the next data message. Control frames (ping/pong) are handled
-     * transparently. A peer close yields a Message with type == Close (and the
-     * connection is marked closed); Error::Timeout if none arrived in time.
-     */
+         * Receive the next data message. Control frames (ping/pong) are handled
+         * transparently. A peer close yields a Message with type == Close (and the
+         * connection is marked closed); Error::Timeout if none arrived in time.
+         */
         Result<Message> recv(int timeout_ms);
 
         void close();
-        bool valid() const noexcept { return tls_.valid(); }
+        bool valid() const noexcept
+        {
+            return tls_.valid();
+        }
 
     private:
-        explicit WebSocket(Tls tls) noexcept : tls_(std::move(tls))
-        {
-        }
+        explicit WebSocket(Tls tls) noexcept : tls_(std::move(tls)) {}
 
         Result<std::size_t> read_more(int timeout_ms);
         Status send_frame(std::uint8_t opcode, bool fin, std::span<const std::uint8_t> data);

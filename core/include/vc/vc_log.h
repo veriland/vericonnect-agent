@@ -16,16 +16,24 @@
 
 namespace vc::log
 {
-    enum class Level { Trace = 0, Debug, Info, Succ /* logged at Info */, Warn, Error };
+    enum class Level
+    {
+        Trace = 0,
+        Debug,
+        Info,
+        Succ /* logged at Info */,
+        Warn,
+        Error
+    };
 
     struct Config
     {
         Level level = Level::Info;
         bool enabled = true;
-        bool console = true; /* echo to stdout             */
+        bool console = true;         /* echo to stdout             */
         bool show_event_type = true; /* [INFO] tags                */
-        bool time_precision = true; /* milliseconds in timestamps */
-        std::string file_path; /* empty = no file logging    */
+        bool time_precision = true;  /* milliseconds in timestamps */
+        std::string file_path;       /* empty = no file logging    */
         int max_file_size_mb = 10;
         int max_rotate_files = 10;
     };

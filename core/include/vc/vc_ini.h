@@ -14,16 +14,15 @@
 namespace vc
 {
     /* Ordered INI store. Keys are grouped by section; insertion order is
- * preserved so save() reproduces a stable layout. Lookups are
- * case-insensitive on both section and key. */
+     * preserved so save() reproduces a stable layout. Lookups are
+     * case-insensitive on both section and key. */
     class Ini
     {
     public:
         static Result<Ini> load(const std::string& path);
         Status save(const std::string& path) const;
 
-        std::optional<std::string_view> get(std::string_view section,
-                                            std::string_view key) const;
+        std::optional<std::string_view> get(std::string_view section, std::string_view key) const;
         int get_int(std::string_view section, std::string_view key, int def) const;
         bool get_bool(std::string_view section, std::string_view key, bool def) const;
 

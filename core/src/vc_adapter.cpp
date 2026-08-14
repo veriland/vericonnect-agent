@@ -98,8 +98,7 @@ namespace vc
             std::optional<Adapter> ad = Adapter::load(fs::join(dir, n));
             if (ad)
             {
-                log::message(log::Level::Info, "Loaded adapter '{}' from {}",
-                             ad->id(), ad->path());
+                log::message(log::Level::Info, "Loaded adapter '{}' from {}", ad->id(), ad->path());
                 adapters_.push_back(std::move(*ad));
             }
         }
@@ -126,7 +125,7 @@ namespace vc
             if (!adapter_id.empty()) ad = find(adapter_id);
 
             /* UserCredentials lives inside "Parameters"; accept it at the top
-         * level too for backward compatibility. */
+             * level too for backward compatibility. */
             const Json* params = root->find_ci("Parameters");
             const Json* uc = params ? params->find_ci("UserCredentials") : nullptr;
             if (!uc) uc = root->find_ci("UserCredentials");
@@ -144,15 +143,15 @@ namespace vc
         }
 
         /* Optionally impersonate the requested user for just this command. Never
-     * log the password; the user name is fine to log. */
+         * log the password; the user name is fine to log. */
         std::optional<Impersonation> imp;
         if (!imp_user.empty())
         {
             auto r = Impersonation::begin(imp_user, imp_domain, imp_pass);
             if (!r)
             {
-                log::message(log::Level::Error, "Impersonation failed for user '{}': {}",
-                             imp_user, r.error().message);
+                log::message(log::Level::Error, "Impersonation failed for user '{}': {}", imp_user,
+                             r.error().message);
                 /* 501 when the platform can't do it, 403 for a rejected logon. */
                 return json_error(r.error().code == Error::Unsupported ? 501 : 403,
                                   r.error().message);

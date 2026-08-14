@@ -42,8 +42,7 @@ namespace vc
     };
 
     /* A value of type T on success, or an Error. */
-    template <class T>
-    using Result = std::expected<T, Error>;
+    template <class T> using Result = std::expected<T, Error>;
 
     /* Success or an Error, carrying no value. */
     using Status = std::expected<void, Error>;
@@ -64,11 +63,12 @@ namespace vc
  * containers in new code.
  * ---------------------------------------------------------------------- */
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-void* vc_alloc(size_t n);
-void vc_free(void* p);
+    void* vc_alloc(size_t n);
+    void vc_free(void* p);
 
 #ifdef __cplusplus
 }

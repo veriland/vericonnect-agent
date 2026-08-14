@@ -19,14 +19,13 @@
 namespace vc
 {
     /*
- * namespace_host : e.g. "contoso.servicebus.windows.net"
- * entity_path    : e.g. "myhybridconnection"
- * ttl_seconds    : lifetime from now (0 -> 3600).
- * Returns the token, or an empty string on invalid input.
- */
+     * namespace_host : e.g. "contoso.servicebus.windows.net"
+     * entity_path    : e.g. "myhybridconnection"
+     * ttl_seconds    : lifetime from now (0 -> 3600).
+     * Returns the token, or an empty string on invalid input.
+     */
     std::string sas_token(std::string_view namespace_host, std::string_view entity_path,
-                          std::string_view key_name, std::string_view key,
-                          unsigned ttl_seconds);
+                          std::string_view key_name, std::string_view key, unsigned ttl_seconds);
 } // namespace vc
 
 #endif /* __cplusplus */
