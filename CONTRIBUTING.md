@@ -1,14 +1,14 @@
 # Contributing to VeriConnect
 
 Thanks for your interest in contributing! This project is **source-available**
-under the [Business Source License 1.1](LICENSE). You are welcome to read,
-audit, and propose improvements to the code.
+under the [Functional Source License 1.1 (FSL-1.1-Apache-2.0)](LICENSE). You
+are welcome to read, audit, and propose improvements to the code.
 
 ## Ground rules
 
 - By contributing, you agree that your contribution is licensed under the same
-  terms as the project (the Business Source License 1.1, converting to the
-  Change License on the Change Date).
+  terms as the project (FSL-1.1-Apache-2.0, converting to the Apache License
+  2.0 on the second anniversary of each release).
 - Be respectful. Assume good intent. Keep discussion technical.
 
 ## Developer Certificate of Origin (DCO)
@@ -44,7 +44,7 @@ git push --force-with-lease
 1. Open an issue first for anything non-trivial, so we can agree on the
    approach before you invest time.
 2. Fork the repo and create a topic branch off `main`.
-3. Make your change. Match the surrounding code style (C99, existing naming
+3. Make your change. Match the surrounding code style (C++23, existing naming
    like `vc_*`, no new external dependencies without discussion).
 4. Ensure it builds on the platforms you can test (see [README](README.md)).
 5. Open a pull request. Fill in the template, sign off your commits, and link

@@ -213,10 +213,12 @@ command's `Parameters` carry a `UserCredentials` object, the host runs
 ## License
 
 VeriConnect is **source-available** under the
-[Business Source License 1.1](LICENSE). You may read, audit, modify, and make
-the production use permitted by the Additional Use Grant in the license — but
-you may not use it to offer a competing product or service. Each version
-converts to the Apache License 2.0 on its Change Date.
+[Functional Source License 1.1 (FSL-1.1-Apache-2.0)](LICENSE). You may read,
+audit, modify, and use the Software for any purpose other than a Competing
+Use (offering it as a hosted or managed service, or embedding it in a product
+or service that competes with a commercial offering of the Licensor). Each
+version automatically converts to the Apache License 2.0 on the second
+anniversary of its release.
 
 For commercial licensing outside these terms, contact eralpe@veriland.co.uk.
 
