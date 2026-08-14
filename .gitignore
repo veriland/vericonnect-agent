@@ -13,3 +13,9 @@ Settings.local.ini
 !.vscode/launch.json
 !.vscode/settings.json
 !.vscode/tasks.json
+
+# JetBrains IDE (CLion)
+.idea/
+
+# macOS
+.DS_Store
