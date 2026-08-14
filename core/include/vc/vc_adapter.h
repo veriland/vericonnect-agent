@@ -7,65 +7,124 @@
  *   void        FreeAdapterString(char* p);
  *   const char* GetAdapterInfo(void);   // static string, not freed
  *
- * RunAdapterCommand receives the full command JSON and returns a
- * malloc'd JSON result ({"StatusCode":...,"StatusDescription":...}).
- * The host frees it with FreeAdapterString. All strings crossing the
- * boundary are UTF-8.
+ * RunAdapterCommand receives the full command JSON and returns a malloc'd
+ * JSON result ({"StatusCode":...,"StatusDescription":...}). The host frees it
+ * with FreeAdapterString. All strings crossing the boundary are UTF-8.
  */
 #ifndef VC_ADAPTER_H
 #define VC_ADAPTER_H
 
 #include "vc_common.h"
 
+/* ------------------------------------------------------------------------
+ * Adapter ABI (permanent C linkage; adapters resolve these by plain name).
+ * ---------------------------------------------------------------------- */
+#if defined(_WIN32)
+#  define VC_ADAPTER_EXPORT_LINKAGE __declspec(dllexport)
+#else
+#  define VC_ADAPTER_EXPORT_LINKAGE __attribute__((visibility("default")))
+#endif
+
+#ifdef __cplusplus
+#  define VC_ADAPTER_EXPORT extern "C" VC_ADAPTER_EXPORT_LINKAGE
+#else
+#  define VC_ADAPTER_EXPORT VC_ADAPTER_EXPORT_LINKAGE
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if defined(_WIN32)
-#  define VC_ADAPTER_EXPORT __declspec(dllexport)
-#else
-#  define VC_ADAPTER_EXPORT __attribute__((visibility("default")))
-#endif
-
-typedef char*       (*vc_adapter_run_fn)(const char *request_json);
-typedef void        (*vc_adapter_free_fn)(char *p);
+typedef char* (*vc_adapter_run_fn)(const char* request_json);
+typedef void (*vc_adapter_free_fn)(char* p);
 typedef const char* (*vc_adapter_info_fn)(void);
-
-typedef struct vc_adapter {
-    char               id[64];        /* from GetAdapterInfo "id" */
-    char               path[512];
-    void              *handle;        /* dynlib handle            */
-    vc_adapter_run_fn  run;
-    vc_adapter_free_fn free_str;
-    vc_adapter_info_fn info;
-    struct vc_adapter *next;
-} vc_adapter;
-
-typedef struct vc_adapter_registry {
-    vc_adapter *first;
-} vc_adapter_registry;
-
-/* Loads every vc-adapter-*.dll / .so / .dylib found in dir. */
-int  vc_adapter_registry_load(vc_adapter_registry *reg, const char *dir);
-void vc_adapter_registry_unload(vc_adapter_registry *reg);
-
-/* Find by adapter id (case-insensitive); NULL if not found. */
-vc_adapter *vc_adapter_find(vc_adapter_registry *reg, const char *id);
-
-/*
- * Dispatch a command JSON: routes on the "Adapter" field (falls back
- * to the first loaded adapter). Returns malloc'd (vc_alloc) JSON
- * result the caller frees with vc_free; never returns NULL.
- */
-char *vc_adapter_dispatch(vc_adapter_registry *reg, const char *request_json);
-
-/* dynlib helpers implemented per platform */
-void *vc_dynlib_open(const char *path);
-void *vc_dynlib_sym(void *handle, const char *name);
-void  vc_dynlib_close(void *handle);
 
 #ifdef __cplusplus
 }
 #endif
+
+/* ------------------------------------------------------------------------
+ * Host-side loader (C++ API).
+ * ---------------------------------------------------------------------- */
+#ifdef __cplusplus
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace vc
+{
+    /* RAII wrapper around a dynamically loaded shared library. */
+    class DynLib
+    {
+    public:
+        DynLib() noexcept = default;
+        ~DynLib();
+        DynLib(DynLib&& other) noexcept;
+        DynLib& operator=(DynLib&& other) noexcept;
+        DynLib(const DynLib&) = delete;
+        DynLib& operator=(const DynLib&) = delete;
+
+        static std::optional<DynLib> open(const std::string& path);
+        void* symbol(const char* name) const;
+        explicit operator bool() const noexcept { return handle_ != nullptr; }
+
+    private:
+        explicit DynLib(void* handle) noexcept : handle_(handle)
+        {
+        }
+
+        void* handle_ = nullptr;
+    };
+
+    /* A single loaded adapter shared library. */
+    class Adapter
+    {
+    public:
+        Adapter(Adapter&&) noexcept = default;
+        Adapter& operator=(Adapter&&) noexcept = default;
+
+        /* Load from a shared library; nullopt if it lacks the adapter exports. */
+        static std::optional<Adapter> load(const std::string& path);
+
+        const std::string& id() const noexcept { return id_; }
+        const std::string& path() const noexcept { return path_; }
+
+        /* Invoke the adapter; returns its JSON result (empty if it returned null). */
+        std::string run(const std::string& request_json) const;
+
+    private:
+        Adapter() = default;
+
+        std::string id_;
+        std::string path_;
+        DynLib lib_;
+        vc_adapter_run_fn run_ = nullptr;
+        vc_adapter_free_fn free_ = nullptr;
+        vc_adapter_info_fn info_ = nullptr;
+    };
+
+    class AdapterRegistry
+    {
+    public:
+        /* Load every shared library exposing the adapter exports in dir. */
+        Status load(const std::string& dir);
+
+        /* Find by adapter id (case-insensitive); nullptr if absent. */
+        const Adapter* find(std::string_view id) const;
+
+        /* Dispatch a command JSON (routes on "Adapter", else the first adapter).
+         * Returns a JSON result; never empty. */
+        std::string dispatch(const std::string& request_json);
+
+        bool empty() const noexcept { return adapters_.empty(); }
+
+    private:
+        std::vector<Adapter> adapters_;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

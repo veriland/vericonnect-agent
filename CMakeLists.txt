@@ -1,12 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
-project(VeriConnect C)
+project(VeriConnect CXX)
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
     add_compile_options(/W3 /utf-8)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    # NOMINMAX: keep <windows.h> from defining min/max macros that clobber
+    # std::min / std::max used across the C++ sources.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
 else()
     add_compile_options(-Wall -Wextra)
 endif()

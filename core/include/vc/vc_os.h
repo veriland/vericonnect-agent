@@ -5,16 +5,22 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-void     vc_os_sleep_ms(unsigned ms);
-uint64_t vc_os_monotonic_ms(void);
-/* Cryptographically random bytes (BCryptGenRandom / /dev/urandom). */
-int      vc_os_random(void *buf, size_t len);
+#include <cstdint>
+#include <span>
 
-#ifdef __cplusplus
-}
-#endif
+namespace vc::os
+{
+    /* Sleep for at least ms milliseconds. */
+    void sleep_ms(unsigned ms);
+
+    /* Monotonic clock in milliseconds (unaffected by wall-clock changes). */
+    std::uint64_t monotonic_ms() noexcept;
+
+    /* Fill buf with cryptographically secure random bytes. */
+    Status random_bytes(std::span<std::uint8_t> buf);
+} // namespace vc::os
+
+#endif /* __cplusplus */
 
 #endif

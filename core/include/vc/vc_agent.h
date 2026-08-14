@@ -1,9 +1,9 @@
 /*
- * vc_agent.h - the reusable agent core: loads settings + adapters and
- * pumps the relay listener, dispatching incoming commands to adapters.
+ * vc_agent.h - the reusable agent core: loads settings + adapters and pumps
+ * the relay listener, dispatching incoming commands to adapters.
  *
- * The Windows service, a future Linux daemon and the console test app
- * all call vc_agent_run; only process hosting differs per platform.
+ * The Windows service, a Linux daemon and the console test app all call
+ * vc::agent::run; only process hosting differs per platform.
  */
 #ifndef VC_AGENT_H
 #define VC_AGENT_H
@@ -11,19 +11,23 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_agent_options {
-    const char *settings_path;  /* NULL = <exe dir>/Settings.ini */
-    bool        verbose;        /* force console echo + TRACE level */
-} vc_agent_options;
+#include <functional>
+#include <string>
 
-/* Blocking; returns when *stop becomes true (or fatal init error). */
-int vc_agent_run(const vc_agent_options *opts, volatile bool *stop);
+namespace vc::agent
+{
+    struct Options
+    {
+        std::string settings_path; /* empty = <exe dir>/Settings.ini */
+        bool verbose = false; /* force console echo + TRACE level */
+    };
 
-#ifdef __cplusplus
-}
-#endif
+    /* Blocking; returns when stop_requested() becomes true (or a fatal init
+ * error). */
+    Status run(const Options& opts, const std::function<bool()>& stop_requested);
+} // namespace vc::agent
+
+#endif /* __cplusplus */
 
 #endif

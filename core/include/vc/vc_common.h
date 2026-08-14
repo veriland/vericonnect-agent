@@ -1,46 +1,74 @@
 /*
- * vc_common.h - shared basics for the VeriConnect C code base.
+ * vc_common.h - shared basics for the VeriConnect code base.
  *
- * All strings crossing module boundaries are UTF-8 encoded, NUL
- * terminated char*. Platform layers convert to native encodings
- * (UTF-16 on Windows) internally.
+ * All strings crossing module boundaries are UTF-8 encoded. Platform layers
+ * convert to native encodings (UTF-16 on Windows) internally.
+ *
+ * This header exposes two surfaces during the C++ migration:
+ *   - The modern C++ vocabulary in namespace vc (Error, Result, Bytes, ...).
+ *   - A small C-ABI allocator boundary (vc_alloc/vc_free/...) that is kept for
+ *     the adapter DLL contract, where a buffer allocated on one side is freed
+ *     on the other.
  */
 #ifndef VC_COMMON_H
 #define VC_COMMON_H
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstddef>
+#include <cstdint>
 
+#ifdef __cplusplus
+
+#include <expected>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace vc
+{
+    /* Generic result codes (negative = error). */
+    enum class Error : int
+    {
+        Fail = -1,
+        NoMem = -2,
+        InvalidArg = -3,
+        NotFound = -4,
+        Io = -5,
+        Timeout = -6,
+        Closed = -7,
+        Protocol = -8,
+        Tls = -9,
+        Exists = -10,
+        Unsupported = -11,
+    };
+
+    /* A value of type T on success, or an Error. */
+    template <class T>
+    using Result = std::expected<T, Error>;
+
+    /* Success or an Error, carrying no value. */
+    using Status = std::expected<void, Error>;
+
+    /* Owned byte buffer. */
+    using Bytes = std::vector<std::uint8_t>;
+
+    /* Short human-readable name for an error code (for logging/diagnostics). */
+    std::string_view error_str(Error e) noexcept;
+} // namespace vc
+
+#endif /* __cplusplus */
+
+/* ------------------------------------------------------------------------
+ * Allocator boundary for the adapter DLL contract: the host allocates a
+ * buffer that a dynamically loaded adapter frees (and vice versa), so both
+ * sides must share one allocator. Not for general use - prefer std::
+ * containers in new code.
+ * ---------------------------------------------------------------------- */
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Generic result codes (negative = error). */
-typedef enum vc_err {
-    VC_OK             = 0,
-    VC_E_FAIL         = -1,
-    VC_E_NOMEM        = -2,
-    VC_E_INVALID_ARG  = -3,
-    VC_E_NOT_FOUND    = -4,
-    VC_E_IO           = -5,
-    VC_E_TIMEOUT      = -6,
-    VC_E_CLOSED       = -7,
-    VC_E_PROTOCOL     = -8,
-    VC_E_TLS          = -9,
-    VC_E_EXISTS       = -10,
-    VC_E_UNSUPPORTED  = -11
-} vc_err;
-
-/* malloc that mirrors the adapter ABI contract: buffers returned by an
- * adapter are allocated with vc_alloc and released with vc_free. */
-void *vc_alloc(size_t n);
-void *vc_realloc(void *p, size_t n);
-void  vc_free(void *p);
-char *vc_strdup(const char *s);
-char *vc_strndup(const char *s, size_t n);
+void* vc_alloc(size_t n);
+void vc_free(void* p);
 
 #ifdef __cplusplus
 }

@@ -1,81 +1,94 @@
 /*
- * vc_json.h - small DOM style JSON parser / writer.
+ * vc_json.h - JSON parser / writer.
  *
- * Supports the full JSON grammar (objects, arrays, strings with
- * escapes incl. \uXXXX surrogate pairs, numbers, true/false/null).
- * Input and output are UTF-8.
+ * Supports the full JSON grammar (objects, arrays, strings with escapes
+ * incl. \uXXXX surrogate pairs, numbers, true/false/null). Input and
+ * output are UTF-8.
  */
 #ifndef VC_JSON_H
 #define VC_JSON_H
 
 #include "vc_common.h"
-#include "vc_str.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef enum vc_json_type {
-    VC_JSON_NULL = 0,
-    VC_JSON_BOOL,
-    VC_JSON_NUMBER,
-    VC_JSON_STRING,
-    VC_JSON_ARRAY,
-    VC_JSON_OBJECT
-} vc_json_type;
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
-typedef struct vc_json vc_json;
+namespace vc
+{
+    /* A JSON value with value semantics (copyable, movable). Containers own
+ * their children. */
+    class Json
+    {
+    public:
+        enum class Type { Null, Bool, Number, String, Array, Object };
 
-struct vc_json {
-    vc_json_type type;
-    char        *key;      /* set when this value is an object member */
-    vc_json     *next;     /* sibling in parent container            */
-    /* value */
-    bool         boolean;
-    double       number;
-    char        *string;   /* UTF-8, owned                            */
-    vc_json     *child;    /* first element/member of array/object    */
-};
+        Json() noexcept : type_(Type::Null)
+        {
+        }
 
-/* Parsing ------------------------------------------------------------ */
-vc_json *vc_json_parse(const char *text);            /* NULL on error   */
-vc_json *vc_json_parse_len(const char *text, size_t len);
-void     vc_json_free(vc_json *v);
+        static Json boolean(bool b);
+        static Json number(double n);
+        static Json string(std::string s);
+        static Json array();
+        static Json object();
 
-/* Serialising -------------------------------------------------------- */
-/* Returns malloc'd (vc_alloc) UTF-8 string; caller frees with vc_free. */
-char *vc_json_write(const vc_json *v);
-int   vc_json_write_buf(const vc_json *v, vc_buf *out);
-/* Escape a raw string into out as a JSON string literal (with quotes). */
-int   vc_json_escape_str(const char *s, vc_buf *out);
+        /* Parse a complete JSON document (trailing junk is rejected). */
+        static Result<Json> parse(std::string_view text);
 
-/* Access -------------------------------------------------------------- */
-vc_json    *vc_json_obj_get(const vc_json *obj, const char *key);      /* case sensitive   */
-vc_json    *vc_json_obj_get_ci(const vc_json *obj, const char *key);   /* case insensitive */
-const char *vc_json_get_str(const vc_json *obj, const char *key, const char *def);
-double      vc_json_get_num(const vc_json *obj, const char *key, double def);
-bool        vc_json_get_bool(const vc_json *obj, const char *key, bool def);
-size_t      vc_json_array_size(const vc_json *arr);
+        Type type() const noexcept { return type_; }
+        bool is_null() const noexcept { return type_ == Type::Null; }
+        bool is_bool() const noexcept { return type_ == Type::Bool; }
+        bool is_number() const noexcept { return type_ == Type::Number; }
+        bool is_string() const noexcept { return type_ == Type::String; }
+        bool is_array() const noexcept { return type_ == Type::Array; }
+        bool is_object() const noexcept { return type_ == Type::Object; }
 
-/* Building ------------------------------------------------------------ */
-vc_json *vc_json_new_null(void);
-vc_json *vc_json_new_bool(bool b);
-vc_json *vc_json_new_num(double n);
-vc_json *vc_json_new_str(const char *s);            /* copies s */
-vc_json *vc_json_new_array(void);
-vc_json *vc_json_new_object(void);
+        bool as_bool(bool def = false) const noexcept;
+        double as_number(double def = 0) const noexcept;
+        std::string_view as_string(std::string_view def = "") const noexcept;
 
-/* Add to containers. Object setters copy the key; the value is adopted
- * (owned by the container afterwards). Return VC_OK / error. */
-int vc_json_obj_set(vc_json *obj, const char *key, vc_json *value);
-int vc_json_obj_set_str(vc_json *obj, const char *key, const char *s);
-int vc_json_obj_set_num(vc_json *obj, const char *key, double n);
-int vc_json_obj_set_bool(vc_json *obj, const char *key, bool b);
-int vc_json_obj_set_null(vc_json *obj, const char *key);
-int vc_json_arr_add(vc_json *arr, vc_json *value);
+        /* Object member lookup. Returns nullptr if absent or not an object. */
+        const Json* find(std::string_view key) const noexcept; /* case-sensitive   */
+        const Json* find_ci(std::string_view key) const noexcept; /* case-insensitive */
 
-#ifdef __cplusplus
-}
-#endif
+        /* Convenience typed getters (case-insensitive, returning def on mismatch). */
+        std::string_view get_str(std::string_view key, std::string_view def = "") const noexcept;
+        double get_num(std::string_view key, double def = 0) const noexcept;
+        bool get_bool(std::string_view key, bool def = false) const noexcept;
+
+        /* Number of elements (array) or members (object). */
+        std::size_t size() const noexcept;
+
+        const std::vector<Json>& elements() const noexcept { return arr_; }
+        const std::vector<std::pair<std::string, Json>>& members() const noexcept { return obj_; }
+
+        /* Builders (chainable). set() appends an object member; add() an array
+     * element. */
+        Json& set(std::string key, Json value);
+        Json& add(Json value);
+
+        /* Serialise. */
+        std::string dump() const;
+        void dump_to(std::string& out) const;
+
+        /* Append s as a quoted, escaped JSON string literal to out. */
+        static void escape_to(std::string_view s, std::string& out);
+        static std::string escape(std::string_view s);
+
+    private:
+        Type type_;
+        bool bool_ = false;
+        double num_ = 0;
+        std::string str_;
+        std::vector<Json> arr_;
+        std::vector<std::pair<std::string, Json>> obj_;
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

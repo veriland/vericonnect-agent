@@ -5,18 +5,24 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-/* Returns malloc'd NUL terminated string (vc_free). NULL on OOM. */
-char *vc_base64_encode(const void *data, size_t len);
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 
-/* Returns malloc'd buffer (vc_free), sets *out_len. NULL on invalid
- * input. Whitespace in the input is ignored. */
-uint8_t *vc_base64_decode(const char *text, size_t *out_len);
+namespace vc
+{
+    /* Encode bytes to a base64 string. */
+    std::string base64_encode(std::span<const std::uint8_t> data);
+    std::string base64_encode(std::string_view s);
 
-#ifdef __cplusplus
-}
-#endif
+    /* Decode a base64 string. Whitespace is ignored; returns nullopt on invalid
+ * input. */
+    std::optional<Bytes> base64_decode(std::string_view text);
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

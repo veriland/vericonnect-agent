@@ -9,24 +9,27 @@
 #include "vc_relay.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_settings {
-    vc_relay_config relay;          /* [Connection] */
-    vc_log_config   logging;        /* [Logging]    */
-    char            adapters_dir[512]; /* [Adapters] Directory */
-} vc_settings;
+#include <string>
 
-/* Loads settings; missing file yields defaults + VC_E_NOT_FOUND. */
-int vc_settings_load(const char *path, vc_settings *out);
-int vc_settings_save(const char *path, const vc_settings *s);
+namespace vc
+{
+    struct Settings
+    {
+        RelayConfig relay; /* [Connection] */
+        log::Config logging; /* [Logging]    */
+        std::string adapters_dir = "."; /* [Adapters] Directory */
 
-/* Default path: <exe dir>/Settings.ini (vc_free). */
-char *vc_settings_default_path(void);
+        /* Load settings; a missing file yields Error::NotFound (use value_or with
+     * a default-constructed Settings for defaults). */
+        static Result<Settings> load(const std::string& path);
+        Status save(const std::string& path) const;
 
-#ifdef __cplusplus
-}
-#endif
+        /* Default path: <exe dir>/Settings.ini. */
+        static std::string default_path();
+    };
+} // namespace vc
+
+#endif /* __cplusplus */
 
 #endif

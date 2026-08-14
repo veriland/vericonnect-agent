@@ -15,59 +15,57 @@
 #include "vc_common.h"
 
 #ifdef __cplusplus
-extern "C" {
-#endif
 
-typedef struct vc_relay_listener vc_relay_listener;
+#include <cstdint>
+#include <functional>
+#include <span>
+#include <string>
+#include <string_view>
 
-typedef struct vc_relay_config {
-    char namespace_host[256];   /* contoso.servicebus.windows.net */
-    char hybrid_connection[128];
-    char key_name[128];
-    char key[256];
-    unsigned token_ttl_seconds; /* 0 = default 3600 */
-} vc_relay_config;
+namespace vc
+{
+    struct RelayConfig
+    {
+        std::string namespace_host; /* contoso.servicebus.windows.net */
+        std::string hybrid_connection;
+        std::string key_name;
+        std::string key;
+        unsigned token_ttl_seconds = 0; /* 0 = default 3600 */
+    };
 
-/* Response the handler wants to send back. */
-typedef struct vc_relay_response {
-    int      status_code;
-    char     status_desc[256];
-    uint8_t *body;        /* vc_alloc'd; listener takes ownership */
-    size_t   body_len;
-    char     content_type[128]; /* default application/json */
-} vc_relay_response;
+    struct RelayRequest
+    {
+        std::string_view id;
+        std::string_view method;
+        std::string_view target; /* requestTarget */
+        std::string_view headers_json; /* serialized requestHeaders, or empty */
+        std::span<const std::uint8_t> body;
+    };
 
-typedef struct vc_relay_request {
-    const char *id;
-    const char *method;
-    const char *target;          /* requestTarget */
-    const char *headers_json;    /* serialized requestHeaders or NULL */
-    const uint8_t *body;
-    size_t      body_len;
-} vc_relay_request;
+    struct RelayResponse
+    {
+        int status_code = 500;
+        std::string status_desc = "Internal Server Error";
+        Bytes body;
+        std::string content_type; /* default application/json */
+    };
 
-typedef struct vc_relay_callbacks {
-    void *user;
-    /* Fill 'resp'. Return VC_OK if resp is valid. */
-    int  (*on_request)(void *user, const vc_relay_request *req,
-                       vc_relay_response *resp);
-    /* Informational events (connected, disconnected, renew, errors). */
-    void (*on_event)(void *user, const char *event, int code,
-                     const char *description);
-} vc_relay_callbacks;
+    struct RelayCallbacks
+    {
+        /* Fill resp; return true if resp is valid. */
+        std::function<bool(const RelayRequest& req, RelayResponse& resp)> on_request;
+        /* Informational events (connected, disconnected, renew, errors). */
+        std::function<void(std::string_view event, int code, std::string_view desc)> on_event;
+    };
 
-/*
- * Runs the listener loop until *stop becomes true.
- * Blocking call; reconnects on failures. Returns VC_OK on requested
- * stop, error code if it could never establish a connection and gave
- * up (it does not give up by default).
+    /*
+ * Run the listener loop until stop_requested() returns true. Blocking;
+ * reconnects on failure. Returns success on a requested stop.
  */
-int vc_relay_listen(const vc_relay_config *cfg,
-                    const vc_relay_callbacks *cb,
-                    volatile bool *stop);
+    Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
+                        const std::function<bool()>& stop_requested);
+} // namespace vc
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* __cplusplus */
 
 #endif
