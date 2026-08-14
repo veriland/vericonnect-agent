@@ -33,9 +33,9 @@ namespace vc
         Tls& operator=(const Tls&) = delete;
 
         /* Perform the TLS handshake over an already-connected socket; hostname is
-     * used for SNI and certificate validation. The Tls takes ownership of the
-     * socket (it is closed when the Tls is destroyed, or by connect() on
-     * failure). */
+         * used for SNI and certificate validation. The Tls takes ownership of the
+         * socket (it is closed when the Tls is destroyed, or by connect() on
+         * failure). */
         static Result<Tls> connect(Socket sock, const std::string& hostname, int timeout_ms);
 
         Status send(std::span<const std::uint8_t> data);
@@ -43,7 +43,10 @@ namespace vc
         Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
         void close();
-        bool valid() const noexcept { return impl_ != nullptr; }
+        bool valid() const noexcept
+        {
+            return impl_ != nullptr;
+        }
 
     private:
         struct Impl;

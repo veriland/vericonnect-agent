@@ -16,12 +16,12 @@ namespace vc
 {
     struct Settings
     {
-        RelayConfig relay; /* [Connection] */
-        log::Config logging; /* [Logging]    */
+        RelayConfig relay;              /* [Connection] */
+        log::Config logging;            /* [Logging]    */
         std::string adapters_dir = "."; /* [Adapters] Directory */
 
         /* Load settings; a missing file yields Error::NotFound (use value_or with
-     * a default-constructed Settings for defaults). */
+         * a default-constructed Settings for defaults). */
         static Result<Settings> load(const std::string& path);
         Status save(const std::string& path) const;
 

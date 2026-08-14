@@ -18,8 +18,8 @@ namespace vc::fs
     {
         stdfs::path to_path(std::string_view utf8)
         {
-            return stdfs::path(std::u8string(reinterpret_cast<const char8_t*>(utf8.data()),
-                                             utf8.size()));
+            return stdfs::path(
+                std::u8string(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
         }
 
         std::string from_path(const stdfs::path& p)
@@ -106,7 +106,8 @@ namespace vc::fs
         std::string out(a);
         if (out.back() != '/') out += '/';
         std::size_t i = 0;
-        while (i < b.size() && b[i] == '/') i++;
+        while (i < b.size() && b[i] == '/')
+            i++;
         out.append(b.substr(i));
         return out;
     }

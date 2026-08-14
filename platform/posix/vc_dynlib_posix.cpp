@@ -4,9 +4,15 @@
 
 namespace vc
 {
-    DynLib::~DynLib() { if (handle_) dlclose(handle_); }
+    DynLib::~DynLib()
+    {
+        if (handle_) dlclose(handle_);
+    }
 
-    DynLib::DynLib(DynLib&& other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
+    DynLib::DynLib(DynLib&& other) noexcept : handle_(other.handle_)
+    {
+        other.handle_ = nullptr;
+    }
 
     DynLib& DynLib::operator=(DynLib&& other) noexcept
     {
@@ -31,4 +37,3 @@ namespace vc
         return handle_ ? dlsym(handle_, name) : nullptr;
     }
 } // namespace vc
-

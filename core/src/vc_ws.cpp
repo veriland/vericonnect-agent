@@ -60,8 +60,7 @@ namespace vc
 
     Result<WebSocket> WebSocket::connect(const std::string& host, int port,
                                          const std::string& path_and_query,
-                                         std::string_view extra_headers,
-                                         int timeout_ms)
+                                         std::string_view extra_headers, int timeout_ms)
     {
         Result<Socket> sock = Socket::connect(host, port, timeout_ms);
         if (!sock) return std::unexpected(sock.error());
@@ -77,17 +76,23 @@ namespace vc
 
         std::string req;
         req.reserve(256);
-        req.append("GET ").append(path_and_query).append(" HTTP/1.1\r\n")
-           .append("Host: ").append(host).append("\r\n")
-           .append("Upgrade: websocket\r\n")
-           .append("Connection: Upgrade\r\n")
-           .append("Sec-WebSocket-Key: ").append(key).append("\r\n")
-           .append("Sec-WebSocket-Version: 13\r\n")
-           .append(extra_headers)
-           .append("\r\n");
+        req.append("GET ")
+            .append(path_and_query)
+            .append(" HTTP/1.1\r\n")
+            .append("Host: ")
+            .append(host)
+            .append("\r\n")
+            .append("Upgrade: websocket\r\n")
+            .append("Connection: Upgrade\r\n")
+            .append("Sec-WebSocket-Key: ")
+            .append(key)
+            .append("\r\n")
+            .append("Sec-WebSocket-Version: 13\r\n")
+            .append(extra_headers)
+            .append("\r\n");
 
         if (!ws.tls_.send(std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(req.data()), req.size())))
+                reinterpret_cast<const std::uint8_t*>(req.data()), req.size())))
             return std::unexpected(Error::Io);
 
         /* read the 101 response header block */
@@ -161,8 +166,7 @@ namespace vc
         if (closed_) return std::unexpected(Error::Closed);
         std::uint8_t opcode = (type == MsgType::Text) ? 0x1 : 0x2;
 
-        if (data.size() <= kFragSize)
-            return send_frame(opcode, true, data);
+        if (data.size() <= kFragSize) return send_frame(opcode, true, data);
 
         std::size_t off = 0;
         bool first = true;
@@ -188,10 +192,8 @@ namespace vc
     Status WebSocket::send_close(std::uint16_t code)
     {
         if (closed_) return std::unexpected(Error::Closed);
-        std::uint8_t payload[2] = {
-            static_cast<std::uint8_t>(code >> 8),
-            static_cast<std::uint8_t>(code)
-        };
+        std::uint8_t payload[2] = {static_cast<std::uint8_t>(code >> 8),
+                                   static_cast<std::uint8_t>(code)};
         return send_frame(0x8, true, std::span<const std::uint8_t>(payload, 2));
     }
 
@@ -222,7 +224,8 @@ namespace vc
             {
                 if (avail < pos + 8) return std::optional<Frame>{};
                 len = 0;
-                for (int i = 0; i < 8; i++) len = (len << 8) | p[pos + i];
+                for (int i = 0; i < 8; i++)
+                    len = (len << 8) | p[pos + i];
                 pos += 8;
             }
             if (len > kMaxMsg) return std::unexpected(Error::Protocol);
@@ -238,7 +241,8 @@ namespace vc
 
             f.payload.assign(p + pos, p + pos + len);
             if (masked)
-                for (std::size_t i = 0; i < f.payload.size(); i++) f.payload[i] ^= mask[i & 3];
+                for (std::size_t i = 0; i < f.payload.size(); i++)
+                    f.payload[i] ^= mask[i & 3];
 
             in.erase(in.begin(), in.begin() + pos + static_cast<std::size_t>(len));
             return std::optional<Frame>{std::move(f)};
@@ -290,7 +294,8 @@ namespace vc
             case 0xA: /* pong */
                 continue;
             case 0x8: /* close */
-                send_frame(0x8, true, std::span<const std::uint8_t>(f.payload).first(
+                send_frame(0x8, true,
+                           std::span<const std::uint8_t>(f.payload).first(
                                f.payload.size() > 2 ? 2 : f.payload.size()));
                 closed_ = true;
                 return Message{MsgType::Close, std::move(f.payload)};
@@ -298,19 +303,15 @@ namespace vc
                 if (!in_fragmented) return std::unexpected(Error::Protocol);
                 msg.insert(msg.end(), f.payload.begin(), f.payload.end());
                 if (f.fin)
-                    return Message{
-                        msg_opcode == 0x1 ? MsgType::Text : MsgType::Binary,
-                        std::move(msg)
-                    };
+                    return Message{msg_opcode == 0x1 ? MsgType::Text : MsgType::Binary,
+                                   std::move(msg)};
                 continue;
             case 0x1:
             case 0x2:
                 if (in_fragmented) return std::unexpected(Error::Protocol);
                 if (f.fin)
-                    return Message{
-                        f.opcode == 0x1 ? MsgType::Text : MsgType::Binary,
-                        std::move(f.payload)
-                    };
+                    return Message{f.opcode == 0x1 ? MsgType::Text : MsgType::Binary,
+                                   std::move(f.payload)};
                 in_fragmented = true;
                 msg_opcode = f.opcode;
                 msg.insert(msg.end(), f.payload.begin(), f.payload.end());

@@ -12,9 +12,15 @@
 
 namespace vc
 {
-    Socket::~Socket() { close(); }
+    Socket::~Socket()
+    {
+        close();
+    }
 
-    Socket::Socket(Socket&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    Socket::Socket(Socket&& other) noexcept : fd_(other.fd_)
+    {
+        other.fd_ = -1;
+    }
 
     Socket& Socket::operator=(Socket&& other) noexcept
     {
@@ -36,13 +42,9 @@ namespace vc
         }
     }
 
-    void Socket::global_init() noexcept
-    {
-    }
+    void Socket::global_init() noexcept {}
 
-    void Socket::global_cleanup() noexcept
-    {
-    }
+    void Socket::global_cleanup() noexcept {}
 
     Result<Socket> Socket::connect(const std::string& host, int port, int timeout_ms)
     {
@@ -121,8 +123,8 @@ namespace vc
         FD_ZERO(&r);
         FD_SET(static_cast<int>(fd_), &r);
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-        int sel = select(static_cast<int>(fd_) + 1, &r, nullptr, nullptr,
-                         timeout_ms < 0 ? nullptr : &tv);
+        int sel =
+            select(static_cast<int>(fd_) + 1, &r, nullptr, nullptr, timeout_ms < 0 ? nullptr : &tv);
         if (sel == 0) return std::unexpected(Error::Timeout);
         if (sel < 0) return std::unexpected(Error::Io);
         ssize_t n = ::recv(static_cast<int>(fd_), buf.data(), buf.size(), 0);
@@ -131,4 +133,3 @@ namespace vc
         return static_cast<std::size_t>(n);
     }
 } // namespace vc
-

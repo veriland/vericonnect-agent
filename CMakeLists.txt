@@ -4,6 +4,11 @@ project(VeriConnect CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# vc_core is a static library that is linked into the filesystem adapter's
+# shared library (vc-adapter-filesystem.so / .dll). On ELF platforms the
+# static objects must be position-independent for that link to succeed.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 if(MSVC)
     add_compile_options(/W3 /utf-8)
     # NOMINMAX: keep <windows.h> from defining min/max macros that clobber

@@ -190,10 +190,14 @@ namespace vc
             {
                 char c = ps.p[i];
                 v <<= 4;
-                if (c >= '0' && c <= '9') v |= static_cast<std::uint32_t>(c - '0');
-                else if (c >= 'a' && c <= 'f') v |= static_cast<std::uint32_t>(c - 'a' + 10);
-                else if (c >= 'A' && c <= 'F') v |= static_cast<std::uint32_t>(c - 'A' + 10);
-                else return false;
+                if (c >= '0' && c <= '9')
+                    v |= static_cast<std::uint32_t>(c - '0');
+                else if (c >= 'a' && c <= 'f')
+                    v |= static_cast<std::uint32_t>(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F')
+                    v |= static_cast<std::uint32_t>(c - 'A' + 10);
+                else
+                    return false;
             }
             ps.p += 4;
             out = v;
@@ -221,43 +225,51 @@ namespace vc
                     char e = *ps.p++;
                     switch (e)
                     {
-                    case '"': out += '"';
+                    case '"':
+                        out += '"';
                         break;
-                    case '\\': out += '\\';
+                    case '\\':
+                        out += '\\';
                         break;
-                    case '/': out += '/';
+                    case '/':
+                        out += '/';
                         break;
-                    case 'b': out += '\b';
+                    case 'b':
+                        out += '\b';
                         break;
-                    case 'f': out += '\f';
+                    case 'f':
+                        out += '\f';
                         break;
-                    case 'n': out += '\n';
+                    case 'n':
+                        out += '\n';
                         break;
-                    case 'r': out += '\r';
+                    case 'r':
+                        out += '\r';
                         break;
-                    case 't': out += '\t';
+                    case 't':
+                        out += '\t';
                         break;
                     case 'u':
+                    {
+                        std::uint32_t cp;
+                        if (!parse_hex4(ps, cp)) return false;
+                        if (cp >= 0xD800 && cp <= 0xDBFF)
                         {
-                            std::uint32_t cp;
-                            if (!parse_hex4(ps, cp)) return false;
-                            if (cp >= 0xD800 && cp <= 0xDBFF)
-                            {
-                                if (ps.end - ps.p < 6 || ps.p[0] != '\\' || ps.p[1] != 'u')
-                                    return false;
-                                ps.p += 2;
-                                std::uint32_t lo;
-                                if (!parse_hex4(ps, lo)) return false;
-                                if (lo < 0xDC00 || lo > 0xDFFF) return false;
-                                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                            }
-                            else if (cp >= 0xDC00 && cp <= 0xDFFF)
-                            {
+                            if (ps.end - ps.p < 6 || ps.p[0] != '\\' || ps.p[1] != 'u')
                                 return false;
-                            }
-                            append_utf8(out, cp);
-                            break;
+                            ps.p += 2;
+                            std::uint32_t lo;
+                            if (!parse_hex4(ps, lo)) return false;
+                            if (lo < 0xDC00 || lo > 0xDFFF) return false;
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                         }
+                        else if (cp >= 0xDC00 && cp <= 0xDFFF)
+                        {
+                            return false;
+                        }
+                        append_utf8(out, cp);
+                        break;
+                    }
                     default:
                         return false;
                     }
@@ -275,7 +287,7 @@ namespace vc
             return false;
         }
 
-        bool parse_value(Parser & ps, Json & out);
+        bool parse_value(Parser& ps, Json& out);
 
         bool parse_object(Parser& ps, Json& out)
         {
@@ -434,19 +446,26 @@ namespace vc
         {
             switch (c)
             {
-            case '"': out += "\\\"";
+            case '"':
+                out += "\\\"";
                 break;
-            case '\\': out += "\\\\";
+            case '\\':
+                out += "\\\\";
                 break;
-            case '\b': out += "\\b";
+            case '\b':
+                out += "\\b";
                 break;
-            case '\f': out += "\\f";
+            case '\f':
+                out += "\\f";
                 break;
-            case '\n': out += "\\n";
+            case '\n':
+                out += "\\n";
                 break;
-            case '\r': out += "\\r";
+            case '\r':
+                out += "\\r";
                 break;
-            case '\t': out += "\\t";
+            case '\t':
+                out += "\\t";
                 break;
             default:
                 if (c < 0x20)
@@ -494,13 +513,17 @@ namespace vc
     {
         switch (type_)
         {
-        case Type::Null: out += "null";
+        case Type::Null:
+            out += "null";
             break;
-        case Type::Bool: out += (bool_ ? "true" : "false");
+        case Type::Bool:
+            out += (bool_ ? "true" : "false");
             break;
-        case Type::Number: write_number(num_, out);
+        case Type::Number:
+            write_number(num_, out);
             break;
-        case Type::String: escape_to(str_, out);
+        case Type::String:
+            escape_to(str_, out);
             break;
         case Type::Array:
             out += '[';

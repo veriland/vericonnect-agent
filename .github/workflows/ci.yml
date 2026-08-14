@@ -1,0 +1,91 @@
+name: CI
+
+# Runs on every pull request targeting main. Builds the project on Windows
+# and Linux, runs the core self-test, and enforces clang-format style.
+# Merges into main are gated on this workflow succeeding.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format-check:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format 20.1.7
+        # PyPI ships a version-pinned clang-format wheel with the native
+        # binary bundled. Pinning the exact version keeps the CI check
+        # byte-for-byte consistent with the version contributors run
+        # locally (via LLVM 20).
+        run: pip install --user clang-format==20.1.7
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          files=$(git ls-files '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp')
+          if [ -z "$files" ]; then
+            echo "No C/C++ sources to check."
+            exit 0
+          fi
+          # Skip generated resource files.
+          files=$(echo "$files" | grep -vE '(^|/)(build|cmake/version\.rc\.in)($|/)' || true)
+          # --dry-run --Werror: prints the offending diff and exits non-zero.
+          if ! clang-format --dry-run --Werror $files; then
+            echo ""
+            echo "Run 'clang-format -i <file>' locally to fix, or apply the"
+            echo "repo style with:  git ls-files '*.cpp' '*.h' '*.hpp' | xargs clang-format -i"
+            exit 1
+          fi
+
+  build-test:
+    name: build & self-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            preset: vs2022
+            build-flags: --config Release
+            selftest: build/bin/Release/vc-selftest.exe
+          - os: ubuntu-latest
+            preset: ""
+            build-flags: ""
+            selftest: build/bin/vc-selftest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build g++-13
+
+      - name: Configure (Windows / MSVC via preset)
+        if: matrix.os == 'windows-2022'
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Configure (Linux / GCC 13)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build ${{ matrix.build-flags }} --parallel
+
+      - name: Run self-test
+        run: ${{ matrix.selftest }}

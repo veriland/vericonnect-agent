@@ -1,0 +1,249 @@
+name: Release
+
+# Runs when a PR is merged into main (or a direct push lands there). Computes
+# the next semver tag from the most recent v* tag, creates that tag, builds
+# release binaries for Windows and Linux, and publishes a GitHub Release with
+# both archives attached.
+#
+# Bump size defaults to patch. To override:
+#   * Add label 'release:minor' or 'release:major' to the PR before merging.
+#   * Add label 'release:skip' (or put '[skip release]' in the commit message)
+#     to publish no new tag for this merge.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      skip: ${{ steps.bump.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine bump kind from PR labels
+        id: kind
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          kind=patch
+          # The merge commit's associated PR (if any) carries the label hint.
+          pr_json=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+                     2>/dev/null || echo '[]')
+          labels=$(echo "$pr_json" | jq -r '.[0].labels[]?.name // empty')
+          if echo "$labels" | grep -qx 'release:major'; then kind=major
+          elif echo "$labels" | grep -qx 'release:minor'; then kind=minor
+          elif echo "$labels" | grep -qx 'release:skip'; then kind=skip
+          fi
+          # Explicit opt-out via commit message.
+          if git log -1 --pretty=%B "${{ github.sha }}" | grep -qi '\[skip release\]'; then
+            kind=skip
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "Detected bump kind: $kind"
+
+      - name: Compute next version tag
+        id: bump
+        run: |
+          set -euo pipefail
+          kind='${{ steps.kind.outputs.kind }}'
+          if [ "$kind" = "skip" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release skipped for this commit."
+            exit 0
+          fi
+          last=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$last" ]; then
+            last="v0.0.0"
+          fi
+          echo "Last tag: $last"
+          ver=${last#v}
+          major=${ver%%.*}
+          rest=${ver#*.}
+          minor=${rest%%.*}
+          patch=${rest#*.}
+          case "$kind" in
+            major) major=$((major+1)); minor=0; patch=0 ;;
+            minor) minor=$((minor+1)); patch=0 ;;
+            patch) patch=$((patch+1)) ;;
+          esac
+          version="${major}.${minor}.${patch}"
+          tag="v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Next release: $tag"
+
+  build:
+    name: Build release (${{ matrix.os }})
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-2022
+            arch: win-x64
+            preset: vs2022
+            build-flags: --config Release
+            bin-dir: build/bin/Release
+            selftest: build/bin/Release/vc-selftest.exe
+          - os: ubuntu-latest
+            arch: linux-x64
+            preset: ""
+            build-flags: ""
+            bin-dir: build/bin
+            selftest: build/bin/vc-selftest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build g++-13
+
+      - name: Stamp version into CMakeLists.txt
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          major=${VERSION%%.*}; rest=${VERSION#*.}
+          minor=${rest%%.*};   patch=${rest#*.}
+          sed -i.bak -E \
+            -e "s/^(set\\(VC_VER_MAJOR )[0-9]+\\)/\\1${major})/" \
+            -e "s/^(set\\(VC_VER_MINOR )[0-9]+\\)/\\1${minor})/" \
+            -e "s/^(set\\(VC_VER_PATCH )[0-9]+\\)/\\1${patch})/" \
+            -e "s/^(set\\(VC_VER_BUILD )[0-9]+\\)/\\1${GITHUB_RUN_NUMBER})/" \
+            CMakeLists.txt
+          rm -f CMakeLists.txt.bak
+          grep -E '^set\(VC_VER_' CMakeLists.txt
+
+      - name: Configure (Windows / MSVC)
+        if: matrix.os == 'windows-2022'
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Configure (Linux / GCC 13)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build ${{ matrix.build-flags }} --parallel
+
+      - name: Run self-test
+        run: ${{ matrix.selftest }}
+
+      - name: Package archive
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          BIN_DIR: ${{ matrix.bin-dir }}
+        run: |
+          set -euo pipefail
+          name="vericonnect-${VERSION}-${ARCH}"
+          mkdir -p "dist/${name}"
+          cp -r "${BIN_DIR}/." "dist/${name}/"
+          cp LICENSE README.md SECURITY.md "dist/${name}/" 2>/dev/null || true
+          cd dist
+          if [ "$ARCH" = "win-x64" ]; then
+            7z a -tzip "${name}.zip" "${name}" >/dev/null
+            echo "asset=dist/${name}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${name}.tar.gz" "${name}"
+            echo "asset=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vericonnect-${{ needs.version.outputs.version }}-${{ matrix.arch }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Tag & publish release
+    needs: [version, build]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: ls -la dist
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists; nothing to do."
+            exit 0
+          fi
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+
+      - name: Generate release notes
+        id: notes
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          prev=$(git tag --list 'v*' --sort=-v:refname | grep -vx "${TAG}" | head -n1 || true)
+          {
+            echo "## VeriConnect ${TAG}"
+            echo ""
+            if [ -n "$prev" ]; then
+              echo "Changes since ${prev}:"
+              echo ""
+              git log --pretty='* %s (%h)' "${prev}..HEAD"
+            else
+              echo "Initial release."
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: VeriConnect ${{ needs.version.outputs.tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.zip
+            dist/*.tar.gz

@@ -6,8 +6,7 @@ namespace vc
 {
     namespace
     {
-        constexpr char kTab[] =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        constexpr char kTab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
         int b64_val(char c) noexcept
         {
@@ -31,7 +30,7 @@ namespace vc
         while (i + 3 <= len)
         {
             std::uint32_t v = static_cast<std::uint32_t>(p[i]) << 16 |
-                static_cast<std::uint32_t>(p[i + 1]) << 8 | p[i + 2];
+                              static_cast<std::uint32_t>(p[i + 1]) << 8 | p[i + 2];
             out += kTab[(v >> 18) & 63];
             out += kTab[(v >> 12) & 63];
             out += kTab[(v >> 6) & 63];
@@ -49,8 +48,8 @@ namespace vc
         }
         else if (rem == 2)
         {
-            std::uint32_t v = static_cast<std::uint32_t>(p[i]) << 16 |
-                static_cast<std::uint32_t>(p[i + 1]) << 8;
+            std::uint32_t v =
+                static_cast<std::uint32_t>(p[i]) << 16 | static_cast<std::uint32_t>(p[i + 1]) << 8;
             out += kTab[(v >> 18) & 63];
             out += kTab[(v >> 12) & 63];
             out += kTab[(v >> 6) & 63];
@@ -96,4 +95,3 @@ namespace vc
         return out;
     }
 } // namespace vc
-

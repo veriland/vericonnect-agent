@@ -45,13 +45,14 @@ namespace vc
         Impersonation& operator=(const Impersonation&) = delete;
 
         /*
-     * Begin impersonating `user` on the calling thread.
-     *   user     : account name (UTF-8), required.
-     *   domain   : domain or machine name; empty or "." = local.
-     *   password : plaintext password (UTF-8); may be empty.
-     */
-        static std::expected<Impersonation, ImpersonationError>
-        begin(std::string_view user, std::string_view domain, std::string_view password);
+         * Begin impersonating `user` on the calling thread.
+         *   user     : account name (UTF-8), required.
+         *   domain   : domain or machine name; empty or "." = local.
+         *   password : plaintext password (UTF-8); may be empty.
+         */
+        static std::expected<Impersonation, ImpersonationError> begin(std::string_view user,
+                                                                      std::string_view domain,
+                                                                      std::string_view password);
 
     private:
         struct Impl;

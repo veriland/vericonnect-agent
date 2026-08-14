@@ -11,9 +11,8 @@ namespace vc
     {
         bool is_unreserved(unsigned char c) noexcept
         {
-            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-                c == '.' || c == '~';
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                   c == '-' || c == '_' || c == '.' || c == '~';
         }
 
         bool iequals(std::string_view a, std::string_view b) noexcept
@@ -67,7 +66,8 @@ namespace vc
         {
             i++;
             out.port = std::atoi(std::string(rest.substr(i)).c_str());
-            while (i < rest.size() && rest[i] != '/' && rest[i] != '?') i++;
+            while (i < rest.size() && rest[i] != '/' && rest[i] != '?')
+                i++;
         }
         if (out.port == 0)
         {
@@ -82,20 +82,18 @@ namespace vc
         if (i < rest.size() && rest[i] == '/')
         {
             std::size_t path_start = i;
-            while (i < rest.size() && rest[i] != '?') i++;
+            while (i < rest.size() && rest[i] != '?')
+                i++;
             out.path = std::string(rest.substr(path_start, i - path_start));
         }
         else
         {
             out.path = "/";
-            if (i < rest.size() && rest[i] != '?')
-                return std::unexpected(Error::InvalidArg);
+            if (i < rest.size() && rest[i] != '?') return std::unexpected(Error::InvalidArg);
         }
 
-        if (i < rest.size() && rest[i] == '?')
-            out.query = std::string(rest.substr(i + 1));
+        if (i < rest.size() && rest[i] == '?') out.query = std::string(rest.substr(i + 1));
 
         return out;
     }
 } // namespace vc
-

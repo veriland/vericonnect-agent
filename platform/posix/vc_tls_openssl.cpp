@@ -16,9 +16,7 @@ namespace vc
         BIO* wbio = nullptr; /* SSL -> network */
         bool closed = false;
 
-        explicit Impl(Socket s) noexcept : sock(std::move(s))
-        {
-        }
+        explicit Impl(Socket s) noexcept : sock(std::move(s)) {}
 
         ~Impl()
         {
@@ -38,20 +36,20 @@ namespace vc
             while ((pending = BIO_read(wbio, tmp, sizeof tmp)) > 0)
             {
                 auto r = sock.send(std::span<const std::uint8_t>(
-                    reinterpret_cast<const std::uint8_t*>(tmp),
-                    static_cast<std::size_t>(pending)));
+                    reinterpret_cast<const std::uint8_t*>(tmp), static_cast<std::size_t>(pending)));
                 if (!r) return std::unexpected(Error::Io);
             }
             return {};
         }
 
         /* Pull inbound bytes from the socket into the read BIO. Returns bytes
-     * read (>0), 0 on close, or an error. */
+         * read (>0), 0 on close, or an error. */
         Result<std::size_t> pump_in(int timeout_ms)
         {
             char tmp[8192];
-            auto r = sock.recv(std::span<std::uint8_t>(
-                                   reinterpret_cast<std::uint8_t*>(tmp), sizeof tmp), timeout_ms);
+            auto r =
+                sock.recv(std::span<std::uint8_t>(reinterpret_cast<std::uint8_t*>(tmp), sizeof tmp),
+                          timeout_ms);
             if (r && *r > 0)
             {
                 BIO_write(rbio, tmp, static_cast<int>(*r));
@@ -62,9 +60,7 @@ namespace vc
 
     Tls::Tls() noexcept = default;
 
-    Tls::Tls(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
-    {
-    }
+    Tls::Tls(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     Tls::~Tls() = default;
     Tls::Tls(Tls&&) noexcept = default;
@@ -186,6 +182,8 @@ namespace vc
         }
     }
 
-    void Tls::close() { impl_.reset(); }
+    void Tls::close()
+    {
+        impl_.reset();
+    }
 } // namespace vc
-

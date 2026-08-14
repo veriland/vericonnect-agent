@@ -22,8 +22,8 @@ namespace vc::fs
     std::optional<std::string> exe_dir()
     {
         wchar_t path[MAX_PATH * 4];
-        DWORD n = GetModuleFileNameW(nullptr, path,
-                                     static_cast<DWORD>(sizeof path / sizeof path[0]));
+        DWORD n =
+            GetModuleFileNameW(nullptr, path, static_cast<DWORD>(sizeof path / sizeof path[0]));
         if (n == 0) return std::nullopt;
         /* strip the filename */
         for (DWORD i = n; i > 0; i--)

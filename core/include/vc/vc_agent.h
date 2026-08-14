@@ -20,11 +20,11 @@ namespace vc::agent
     struct Options
     {
         std::string settings_path; /* empty = <exe dir>/Settings.ini */
-        bool verbose = false; /* force console echo + TRACE level */
+        bool verbose = false;      /* force console echo + TRACE level */
     };
 
     /* Blocking; returns when stop_requested() becomes true (or a fatal init
- * error). */
+     * error). */
     Status run(const Options& opts, const std::function<bool()>& stop_requested);
 } // namespace vc::agent
 

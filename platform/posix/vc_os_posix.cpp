@@ -17,7 +17,7 @@ namespace vc::os
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return static_cast<std::uint64_t>(ts.tv_sec) * 1000 +
-            static_cast<std::uint64_t>(ts.tv_nsec) / 1000000;
+               static_cast<std::uint64_t>(ts.tv_nsec) / 1000000;
     }
 
     Status random_bytes(std::span<std::uint8_t> buf)
@@ -39,4 +39,3 @@ namespace vc::os
         return {};
     }
 } // namespace vc::os
-

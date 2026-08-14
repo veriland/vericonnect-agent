@@ -56,9 +56,8 @@ namespace vc
         while (pos < text.size())
         {
             std::size_t nl = text.find('\n', pos);
-            std::string_view raw = (nl == std::string_view::npos)
-                                       ? text.substr(pos)
-                                       : text.substr(pos, nl - pos);
+            std::string_view raw =
+                (nl == std::string_view::npos) ? text.substr(pos) : text.substr(pos, nl - pos);
             pos = (nl == std::string_view::npos) ? text.size() : nl + 1;
 
             std::string_view s = trim(raw);
@@ -112,13 +111,12 @@ namespace vc
                 }
             out += '\n';
         }
-        return fs::write_all(path, std::span<const std::uint8_t>(
-                                 reinterpret_cast<const std::uint8_t*>(out.data()),
-                                 out.size()));
+        return fs::write_all(
+            path, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(out.data()),
+                                                out.size()));
     }
 
-    std::optional<std::string_view> Ini::get(std::string_view section,
-                                             std::string_view key) const
+    std::optional<std::string_view> Ini::get(std::string_view section, std::string_view key) const
     {
         const Entry* e = find(section, key);
         if (!e) return std::nullopt;
@@ -136,8 +134,8 @@ namespace vc
     {
         const Entry* e = find(section, key);
         if (!e || e->value.empty()) return def;
-        return iequals(e->value, "1") || iequals(e->value, "true") ||
-            iequals(e->value, "yes") || iequals(e->value, "on");
+        return iequals(e->value, "1") || iequals(e->value, "true") || iequals(e->value, "yes") ||
+               iequals(e->value, "on");
     }
 
     void Ini::set(std::string_view section, std::string_view key, std::string_view value)
@@ -155,4 +153,3 @@ namespace vc
         set(section, key, std::to_string(value));
     }
 } // namespace vc
-

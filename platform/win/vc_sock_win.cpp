@@ -12,9 +12,15 @@ namespace vc
         LONG g_ws_init = 0;
     }
 
-    Socket::~Socket() { close(); }
+    Socket::~Socket()
+    {
+        close();
+    }
 
-    Socket::Socket(Socket&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    Socket::Socket(Socket&& other) noexcept : fd_(other.fd_)
+    {
+        other.fd_ = -1;
+    }
 
     Socket& Socket::operator=(Socket&& other) noexcept
     {
@@ -117,8 +123,8 @@ namespace vc
         std::size_t sent = 0;
         while (sent < data.size())
         {
-            int n = ::send(static_cast<SOCKET>(fd_), p + sent,
-                           static_cast<int>(data.size() - sent), 0);
+            int n =
+                ::send(static_cast<SOCKET>(fd_), p + sent, static_cast<int>(data.size() - sent), 0);
             if (n == SOCKET_ERROR) return std::unexpected(Error::Io);
             sent += static_cast<std::size_t>(n);
         }
