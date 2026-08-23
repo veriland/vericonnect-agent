@@ -53,6 +53,58 @@ namespace vc
                                                  s.size());
         }
 
+        /* The fields the listener actually uses out of a "request" node. The
+         * string_views point into the Json it was parsed from, which outlives
+         * every use here. */
+        struct ParsedRequest
+        {
+            std::string_view id;
+            std::string_view method;
+            std::string_view target;
+            std::string address; /* empty when the node carried none */
+            bool has_method = false;
+            bool has_address = false;
+            bool has_body = false;
+        };
+
+        ParsedRequest parse_request_node(const Json& req_node)
+        {
+            ParsedRequest pr;
+            pr.id = req_node.get_str("id", "");
+            const Json* method_node = req_node.find_ci("method");
+            pr.has_method = method_node && method_node->is_string();
+            pr.method = pr.has_method ? method_node->as_string() : std::string_view{};
+            pr.target = req_node.get_str("requestTarget", "/");
+            const Json* addr_node = req_node.find_ci("address");
+            pr.has_address = addr_node && addr_node->is_string();
+            if (pr.has_address) pr.address = std::string(addr_node->as_string());
+            pr.has_body = req_node.get_bool("body", false);
+            return pr;
+        }
+
+        enum class ResponseChannel
+        {
+            Control,
+            Rendezvous
+        };
+
+        /*
+         * Where a response goes. The control channel caps a message at
+         * kCtrlBodyMax, so a larger body needs a rendezvous connection - but
+         * only if the service offered an address, and only if we are answering
+         * on the control channel in the first place (a response already being
+         * written to a rendezvous connection stays there).
+         *
+         * Pure, so it is tested directly rather than through the socket.
+         */
+        ResponseChannel choose_response_channel(bool on_control, std::size_t body_size,
+                                                bool has_address) noexcept
+        {
+            if (on_control && body_size > kCtrlBodyMax && has_address)
+                return ResponseChannel::Rendezvous;
+            return ResponseChannel::Control;
+        }
+
         class Listener
         {
         public:
@@ -85,6 +137,10 @@ namespace vc
             std::optional<WebSocket> rendezvous_connect(const std::string& address);
             Result<Bytes> read_body(WebSocket& ws, bool expected);
             void handle_request(WebSocket& ws, const Json& req_node, bool on_control);
+            void handle_rendezvous_offer(const std::string& address);
+            RelayResponse invoke_handler(const RelayRequest& req);
+            Status deliver_response(WebSocket& ws, const ParsedRequest& pr,
+                                    const RelayResponse& resp, bool on_control);
             void handle_control_message(std::span<const std::uint8_t> payload);
 
             const RelayConfig& cfg_;
@@ -198,51 +254,80 @@ namespace vc
             return std::move(m->payload);
         }
 
+        void Listener::handle_rendezvous_offer(const std::string& address)
+        {
+            emit("RENDEZVOUS", 0, address);
+            std::optional<WebSocket> rws = rendezvous_connect(address);
+            if (!rws)
+            {
+                emit("RENDEZVOUS_FAILED", 0, address);
+                return;
+            }
+
+            Result<WebSocket::Message> m = rws->recv(kBodyTimeout);
+            if (m && m->type == WebSocket::MsgType::Text)
+            {
+                Result<Json> root = Json::parse(as_view(m->payload));
+                if (root)
+                {
+                    const Json* inner = root->find_ci("request");
+                    if (inner) handle_request(*rws, *inner, false);
+                }
+            }
+            (void)rws->send_close(1000);
+        }
+
+        RelayResponse Listener::invoke_handler(const RelayRequest& req)
+        {
+            RelayResponse resp;
+            if (!cb_.on_request)
+            {
+                resp.status_code = 501;
+                resp.status_desc = "Not Implemented";
+                return resp;
+            }
+            if (!cb_.on_request(req, resp)) resp = RelayResponse{};
+            return resp;
+        }
+
+        Status Listener::deliver_response(WebSocket& ws, const ParsedRequest& pr,
+                                          const RelayResponse& resp, bool on_control)
+        {
+            if (choose_response_channel(on_control, resp.body.size(), pr.has_address) ==
+                ResponseChannel::Rendezvous)
+            {
+                std::optional<WebSocket> rws = rendezvous_connect(pr.address);
+                if (rws)
+                {
+                    Status src = send_response_over(*rws, pr.id, resp);
+                    (void)rws->send_close(1000);
+                    return src;
+                }
+                /* No rendezvous available: try the control channel anyway
+                 * rather than dropping the response entirely. */
+            }
+            return send_response_over(ws, pr.id, resp);
+        }
+
         void Listener::handle_request(WebSocket& ws, const Json& req_node, bool on_control)
         {
-            std::string_view id = req_node.get_str("id", "");
-            const Json* method_node = req_node.find_ci("method");
-            bool has_method = method_node && method_node->is_string();
-            std::string_view method = has_method ? method_node->as_string() : "";
-            std::string_view target = req_node.get_str("requestTarget", "/");
-            const Json* addr_node = req_node.find_ci("address");
-            bool has_address = addr_node && addr_node->is_string();
-            bool has_body = req_node.get_bool("body", false);
+            const ParsedRequest pr = parse_request_node(req_node);
 
-            /* Rendezvous-only offer: no method on the control message; the full
-             * request is delivered on the rendezvous connection. */
-            if (on_control && !has_method)
+            /* Rendezvous-only offer: no method on the control message, so the
+             * full request is delivered on the rendezvous connection. */
+            if (on_control && !pr.has_method)
             {
-                if (!has_address)
+                if (!pr.has_address)
                 {
                     emit("REQUEST_ERROR", 0, "request without method or address");
                     return;
                 }
-                std::string address(addr_node->as_string());
-                emit("RENDEZVOUS", 0, address);
-                std::optional<WebSocket> rws = rendezvous_connect(address);
-                if (!rws)
-                {
-                    emit("RENDEZVOUS_FAILED", 0, address);
-                    return;
-                }
-
-                Result<WebSocket::Message> m = rws->recv(kBodyTimeout);
-                if (m && m->type == WebSocket::MsgType::Text)
-                {
-                    Result<Json> root = Json::parse(as_view(m->payload));
-                    if (root)
-                    {
-                        const Json* inner = root->find_ci("request");
-                        if (inner) handle_request(*rws, *inner, false);
-                    }
-                }
-                (void)rws->send_close(1000);
+                handle_rendezvous_offer(pr.address);
                 return;
             }
 
             /* Body (if any) follows as a binary message on the same channel. */
-            Result<Bytes> body = read_body(ws, has_body);
+            Result<Bytes> body = read_body(ws, pr.has_body);
             if (!body)
             {
                 emit("REQUEST_ERROR", 0, "failed reading request body");
@@ -253,48 +338,19 @@ namespace vc
             if (const Json* hdrs = req_node.find_ci("requestHeaders")) headers_json = hdrs->dump();
 
             RelayRequest req;
-            req.id = id;
-            req.method = method;
-            req.target = target;
+            req.id = pr.id;
+            req.method = pr.method;
+            req.target = pr.target;
             req.headers_json = headers_json;
             req.body = *body;
 
-            RelayResponse resp;
-            if (cb_.on_request)
-            {
-                if (!cb_.on_request(req, resp)) resp = RelayResponse{};
-            }
-            else
-            {
-                resp.status_code = 501;
-                resp.status_desc = "Not Implemented";
-            }
+            const RelayResponse resp = invoke_handler(req);
+            const Status src = deliver_response(ws, pr, resp, on_control);
 
-            /* Send the response: control channel for small bodies, rendezvous for big
-             * ones (the control channel caps messages at 64 KB). */
-            Status src;
-            std::string address = has_address ? std::string(addr_node->as_string()) : std::string();
-            if (on_control && resp.body.size() > kCtrlBodyMax && has_address)
-            {
-                std::optional<WebSocket> rws = rendezvous_connect(address);
-                if (rws)
-                {
-                    src = send_response_over(*rws, id, resp);
-                    (void)rws->send_close(1000);
-                }
-                else
-                {
-                    src = send_response_over(ws, id, resp);
-                }
-            }
-            else
-            {
-                src = send_response_over(ws, id, resp);
-            }
             if (!src)
                 emit("RESPONSE_ERROR", static_cast<int>(src.error()), "failed to send response");
             else
-                emit("RESPONSE_SENT", resp.status_code, target);
+                emit("RESPONSE_SENT", resp.status_code, pr.target);
         }
 
         void Listener::handle_control_message(std::span<const std::uint8_t> payload)
