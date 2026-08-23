@@ -47,11 +47,9 @@ target_include_directories(vc_core PUBLIC include)
 if(WIN32)
     target_link_libraries(vc_core PUBLIC ws2_32 secur32 crypt32 advapi32)
 else()
-    # OpenSSL is required by the POSIX TLS layer (platform/posix/vc_tls_openssl.c).
-    # find_package supplies the include dirs and library paths, which matters on
-    # macOS where Homebrew keeps OpenSSL "keg-only" off the default search path.
-    # If it is not found automatically, hint it, e.g. on Apple Silicon:
-    #   -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
+    # OpenSSL is required by the POSIX TLS layer (platform/posix/vc_tls_openssl.cpp).
+    # cmake/vc_openssl.cmake, included from the top-level CMakeLists, has already
+    # seeded OPENSSL_ROOT_DIR for the platforms that need the hint (macOS).
     find_package(OpenSSL REQUIRED)
     target_link_libraries(vc_core PUBLIC OpenSSL::SSL OpenSSL::Crypto pthread m)
     # libdl is a separate library on Linux but part of libSystem on macOS.
