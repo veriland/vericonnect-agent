@@ -1,9 +1,7 @@
 #include "vc/vc_url.h"
 
-#include <array>
 #include <cctype>
 #include <cstdlib>
-#include <cstring>
 
 namespace vc
 {

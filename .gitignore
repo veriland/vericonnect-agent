@@ -16,6 +16,9 @@ Settings.local.ini
 
 # JetBrains IDE (CLion)
 .idea/
+# CLion's default out-of-source build dirs (cmake-build-debug, -release, ...).
+# The top-level .gitignore already covers 'build/', which is what CI uses.
+cmake-build-*/
 
 # macOS
 .DS_Store

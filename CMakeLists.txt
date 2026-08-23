@@ -66,6 +66,10 @@ function(vc_add_version_info target)
     target_sources(${target} PRIVATE ${gen})
 endfunction()
 
+# OpenSSL discovery for the POSIX TLS layer. Must run before core/ calls
+# find_package(OpenSSL), since it seeds OPENSSL_ROOT_DIR.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/vc_openssl.cmake)
+
 add_subdirectory(core)
 add_subdirectory(adapters/filesystem)
 add_subdirectory(apps/testapp)

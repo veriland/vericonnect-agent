@@ -21,7 +21,6 @@
 #include "vc/vc_os.h"
 #include "vc/vc_sock.h"
 
-#include <cstring>
 #include <optional>
 
 namespace vc

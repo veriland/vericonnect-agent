@@ -1,9 +1,7 @@
 #include "vc/vc_log.h"
 
 #include <cctype>
-#include <cstdarg>
 #include <cstdio>
-#include <cstring>
 #include <ctime>
 
 #if defined(_WIN32)
