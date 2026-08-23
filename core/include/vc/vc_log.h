@@ -38,7 +38,7 @@ namespace vc::log
         int max_rotate_files = 10;
     };
 
-    Status init(const Config& cfg);
+    [[nodiscard]] Status init(const Config& cfg);
     void shutdown();
 
     Level level_from_str(std::string_view s); /* "LOG_DEBUG" etc. */

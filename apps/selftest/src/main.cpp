@@ -163,7 +163,7 @@ namespace
             check("get int", loaded->get_int("Logging", "MaxRotateFiles", 0) == 7);
             check("default", loaded->get_int("Logging", "Missing", 42) == 42);
         }
-        vc::fs::remove_file(path);
+        (void)vc::fs::remove_file(path);
     }
 
     int status_of(const std::string& res)
@@ -194,7 +194,7 @@ namespace
         }
 
         std::string tmp = vc::fs::join(exe_dir, "selftest-fs");
-        vc::fs::mkdir(tmp);
+        (void)vc::fs::mkdir(tmp);
 
         /* CreateFile */
         {
@@ -237,7 +237,7 @@ namespace
 
         std::string copyfile = vc::fs::join(vc::fs::join(tmp, "COPY"), "hello.txt");
         check("moved to COPY", vc::fs::file_exists(copyfile));
-        vc::fs::remove_file(copyfile);
+        (void)vc::fs::remove_file(copyfile);
 
         /* unknown command yields 404 */
         check("unknown cmd 404",

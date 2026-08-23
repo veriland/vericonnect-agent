@@ -229,7 +229,7 @@ namespace vc
                         if (inner) handle_request(*rws, *inner, false);
                     }
                 }
-                rws->send_close(1000);
+                (void)rws->send_close(1000);
                 return;
             }
 
@@ -272,7 +272,7 @@ namespace vc
                 if (rws)
                 {
                     src = send_response_over(*rws, id, resp);
-                    rws->send_close(1000);
+                    (void)rws->send_close(1000);
                 }
                 else
                 {
@@ -338,7 +338,7 @@ namespace vc
                     std::uint64_t now = os::monotonic_ms();
                     if (now >= next_ping_at_)
                     {
-                        ctrl_->send_ping();
+                        (void)ctrl_->send_ping();
                         next_ping_at_ = now + kPingInterval;
                     }
 
@@ -360,7 +360,7 @@ namespace vc
 
                 if (ctrl_)
                 {
-                    if (stop()) ctrl_->send_close(1000);
+                    if (stop()) (void)ctrl_->send_close(1000);
                     ctrl_.reset();
                 }
             }

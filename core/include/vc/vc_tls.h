@@ -36,11 +36,12 @@ namespace vc
          * used for SNI and certificate validation. The Tls takes ownership of the
          * socket (it is closed when the Tls is destroyed, or by connect() on
          * failure). */
-        static Result<Tls> connect(Socket sock, const std::string& hostname, int timeout_ms);
+        [[nodiscard]] static Result<Tls> connect(Socket sock, const std::string& hostname,
+                                                 int timeout_ms);
 
-        Status send(std::span<const std::uint8_t> data);
+        [[nodiscard]] Status send(std::span<const std::uint8_t> data);
         /* Returns decrypted bytes read (>0), 0 on orderly close, or an error. */
-        Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
+        [[nodiscard]] Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
         void close();
         bool valid() const noexcept

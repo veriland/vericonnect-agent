@@ -20,7 +20,7 @@ namespace vc
 
     /* Decode a base64 string. Whitespace is ignored; returns nullopt on invalid
      * input. */
-    std::optional<Bytes> base64_decode(std::string_view text);
+    [[nodiscard]] std::optional<Bytes> base64_decode(std::string_view text);
 } // namespace vc
 
 #endif /* __cplusplus */

@@ -37,7 +37,7 @@ namespace vc::http
     };
 
     /* Perform a single HTTPS request. */
-    Result<Response> request(const Request& req);
+    [[nodiscard]] Result<Response> request(const Request& req);
 } // namespace vc::http
 
 #endif /* __cplusplus */

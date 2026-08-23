@@ -289,14 +289,14 @@ namespace vc
             switch (f.opcode)
             {
             case 0x9: /* ping -> pong with same payload */
-                send_frame(0xA, true, f.payload);
+                (void)send_frame(0xA, true, f.payload);
                 continue;
             case 0xA: /* pong */
                 continue;
             case 0x8: /* close */
-                send_frame(0x8, true,
-                           std::span<const std::uint8_t>(f.payload).first(
-                               f.payload.size() > 2 ? 2 : f.payload.size()));
+                (void)send_frame(0x8, true,
+                                 std::span<const std::uint8_t>(f.payload).first(
+                                     f.payload.size() > 2 ? 2 : f.payload.size()));
                 closed_ = true;
                 return Message{MsgType::Close, std::move(f.payload)};
             case 0x0: /* continuation */

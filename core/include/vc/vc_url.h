@@ -25,7 +25,7 @@ namespace vc
     };
 
     /* Parse an absolute URL. */
-    Result<Url> url_parse(std::string_view url);
+    [[nodiscard]] Result<Url> url_parse(std::string_view url);
 } // namespace vc
 
 #endif /* __cplusplus */

@@ -43,7 +43,7 @@ namespace vc
         static Json object();
 
         /* Parse a complete JSON document (trailing junk is rejected). */
-        static Result<Json> parse(std::string_view text);
+        [[nodiscard]] static Result<Json> parse(std::string_view text);
 
         Type type() const noexcept
         {

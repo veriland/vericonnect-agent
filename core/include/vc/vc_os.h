@@ -18,7 +18,7 @@ namespace vc::os
     std::uint64_t monotonic_ms() noexcept;
 
     /* Fill buf with cryptographically secure random bytes. */
-    Status random_bytes(std::span<std::uint8_t> buf);
+    [[nodiscard]] Status random_bytes(std::span<std::uint8_t> buf);
 } // namespace vc::os
 
 #endif /* __cplusplus */

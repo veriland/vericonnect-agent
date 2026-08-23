@@ -31,14 +31,15 @@ namespace vc
         static void global_cleanup() noexcept;
 
         /* Connect to host:port (TCP). timeout_ms bounds the connect. */
-        static Result<Socket> connect(const std::string& host, int port, int timeout_ms);
+        [[nodiscard]] static Result<Socket> connect(const std::string& host, int port,
+                                                    int timeout_ms);
 
         /* Send all bytes; returns the count sent or an error. */
-        Result<std::size_t> send(std::span<const std::uint8_t> data);
+        [[nodiscard]] Result<std::size_t> send(std::span<const std::uint8_t> data);
 
         /* Returns bytes read (>0), 0 on orderly close, or an error
          * (Error::Timeout if nothing arrived within timeout_ms). */
-        Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
+        [[nodiscard]] Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
         bool valid() const noexcept
         {

@@ -50,9 +50,8 @@ namespace vc
          *   domain   : domain or machine name; empty or "." = local.
          *   password : plaintext password (UTF-8); may be empty.
          */
-        static std::expected<Impersonation, ImpersonationError> begin(std::string_view user,
-                                                                      std::string_view domain,
-                                                                      std::string_view password);
+        [[nodiscard]] static std::expected<Impersonation, ImpersonationError> begin(
+            std::string_view user, std::string_view domain, std::string_view password);
 
     private:
         struct Impl;

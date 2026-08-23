@@ -25,7 +25,7 @@ namespace vc::agent
 
     /* Blocking; returns when stop_requested() becomes true (or a fatal init
      * error). */
-    Status run(const Options& opts, const std::function<bool()>& stop_requested);
+    [[nodiscard]] Status run(const Options& opts, const std::function<bool()>& stop_requested);
 } // namespace vc::agent
 
 #endif /* __cplusplus */

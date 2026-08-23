@@ -62,8 +62,8 @@ namespace vc
      * Run the listener loop until stop_requested() returns true. Blocking;
      * reconnects on failure. Returns success on a requested stop.
      */
-    Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
-                        const std::function<bool()>& stop_requested);
+    [[nodiscard]] Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
+                                      const std::function<bool()>& stop_requested);
 } // namespace vc
 
 #endif /* __cplusplus */

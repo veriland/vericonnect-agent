@@ -19,10 +19,11 @@ namespace vc
     class Ini
     {
     public:
-        static Result<Ini> load(const std::string& path);
-        Status save(const std::string& path) const;
+        [[nodiscard]] static Result<Ini> load(const std::string& path);
+        [[nodiscard]] Status save(const std::string& path) const;
 
-        std::optional<std::string_view> get(std::string_view section, std::string_view key) const;
+        [[nodiscard]] std::optional<std::string_view> get(std::string_view section,
+                                                          std::string_view key) const;
         int get_int(std::string_view section, std::string_view key, int def) const;
         bool get_bool(std::string_view section, std::string_view key, bool def) const;
 

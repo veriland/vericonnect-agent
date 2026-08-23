@@ -67,7 +67,7 @@ namespace vc
         DynLib(const DynLib&) = delete;
         DynLib& operator=(const DynLib&) = delete;
 
-        static std::optional<DynLib> open(const std::string& path);
+        [[nodiscard]] static std::optional<DynLib> open(const std::string& path);
         void* symbol(const char* name) const;
         explicit operator bool() const noexcept
         {
@@ -88,7 +88,7 @@ namespace vc
         Adapter& operator=(Adapter&&) noexcept = default;
 
         /* Load from a shared library; nullopt if it lacks the adapter exports. */
-        static std::optional<Adapter> load(const std::string& path);
+        [[nodiscard]] static std::optional<Adapter> load(const std::string& path);
 
         const std::string& id() const noexcept
         {
@@ -117,7 +117,7 @@ namespace vc
     {
     public:
         /* Load every shared library exposing the adapter exports in dir. */
-        Status load(const std::string& dir);
+        [[nodiscard]] Status load(const std::string& dir);
 
         /* Find by adapter id (case-insensitive); nullptr if absent. */
         const Adapter* find(std::string_view id) const;
