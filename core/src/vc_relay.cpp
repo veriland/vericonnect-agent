@@ -23,6 +23,7 @@
  *  - Tokens are renewed proactively with {"renewToken":{"token":..}}.
  */
 #include "vc/vc_relay.h"
+#include "vc/vc_relay_testing.h"
 #include "vc/vc_ws.h"
 #include "vc/vc_sas.h"
 #include "vc/vc_json.h"
@@ -105,10 +106,15 @@ namespace vc
             return ResponseChannel::Control;
         }
 
-        class Listener
+        template <class Dialler> class Listener
         {
         public:
-            Listener(const RelayConfig& cfg, const RelayCallbacks& cb) : cfg_(cfg), cb_(cb)
+            /* The WebSocket type this dialler hands out: WebSocket in
+             * production, WebSocketT<ScriptedTransport> under test. */
+            using Ws = typename Dialler::websocket_type;
+
+            Listener(const RelayConfig& cfg, const RelayCallbacks& cb, Dialler dialler)
+                : cfg_(cfg), cb_(cb), dial_(std::move(dialler))
             {
                 ttl_ = cfg_.token_ttl_seconds ? cfg_.token_ttl_seconds : 3600;
             }
@@ -132,26 +138,27 @@ namespace vc
 
             Json build_response_msg(std::string_view request_id, const RelayResponse& resp,
                                     bool has_body);
-            Status send_response_over(WebSocket& ws, std::string_view request_id,
+            Status send_response_over(Ws& ws, std::string_view request_id,
                                       const RelayResponse& resp);
-            std::optional<WebSocket> rendezvous_connect(const std::string& address);
-            Result<Bytes> read_body(WebSocket& ws, bool expected);
-            void handle_request(WebSocket& ws, const Json& req_node, bool on_control);
+            std::optional<Ws> rendezvous_connect(const std::string& address);
+            Result<Bytes> read_body(Ws& ws, bool expected);
+            void handle_request(Ws& ws, const Json& req_node, bool on_control);
             void handle_rendezvous_offer(const std::string& address);
             RelayResponse invoke_handler(const RelayRequest& req);
-            Status deliver_response(WebSocket& ws, const ParsedRequest& pr,
-                                    const RelayResponse& resp, bool on_control);
+            Status deliver_response(Ws& ws, const ParsedRequest& pr, const RelayResponse& resp,
+                                    bool on_control);
             void handle_control_message(std::span<const std::uint8_t> payload);
 
             const RelayConfig& cfg_;
             const RelayCallbacks& cb_;
-            std::optional<WebSocket> ctrl_;
+            Dialler dial_;
+            std::optional<Ws> ctrl_;
             unsigned ttl_;
             std::uint64_t token_renew_at_ = 0;
             std::uint64_t next_ping_at_ = 0;
         };
 
-        Status Listener::ctrl_connect()
+        template <class D> Status Listener<D>::ctrl_connect()
         {
             std::string token = make_token();
             if (token.empty()) return std::unexpected(Error::Fail);
@@ -159,7 +166,7 @@ namespace vc
             std::string path = "/$hc/" + cfg_.hybrid_connection +
                                "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
 
-            Result<WebSocket> ws = ws_connect(cfg_.namespace_host, 443, path, "", kConnectTimeout);
+            Result<Ws> ws = dial_(cfg_.namespace_host, 443, path, "", kConnectTimeout);
             if (!ws) return std::unexpected(Error::Io);
             ctrl_ = std::move(*ws);
 
@@ -169,7 +176,7 @@ namespace vc
             return {};
         }
 
-        void Listener::renew_token_if_due()
+        template <class D> void Listener<D>::renew_token_if_due()
         {
             if (os::monotonic_ms() < token_renew_at_) return;
             std::string token = make_token();
@@ -179,7 +186,7 @@ namespace vc
             root.set("renewToken", Json::object().set("token", Json::string(token)));
             std::string msg = root.dump();
 
-            if (ctrl_->send(WebSocket::MsgType::Text, as_bytes(msg)))
+            if (ctrl_->send(Ws::MsgType::Text, as_bytes(msg)))
             {
                 token_renew_at_ =
                     os::monotonic_ms() + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
@@ -187,8 +194,9 @@ namespace vc
             }
         }
 
-        Json Listener::build_response_msg(std::string_view request_id, const RelayResponse& resp,
-                                          bool has_body)
+        template <class D>
+        Json Listener<D>::build_response_msg(std::string_view request_id, const RelayResponse& resp,
+                                             bool has_body)
         {
             Json r = Json::object();
             r.set("requestId", Json::string(std::string(request_id)));
@@ -206,19 +214,22 @@ namespace vc
             return root;
         }
 
-        Status Listener::send_response_over(WebSocket& ws, std::string_view request_id,
-                                            const RelayResponse& resp)
+        template <class D>
+        Status Listener<D>::send_response_over(Ws& ws, std::string_view request_id,
+                                               const RelayResponse& resp)
         {
             bool has_body = !resp.body.empty();
             std::string text = build_response_msg(request_id, resp, has_body).dump();
 
-            Status rc = ws.send(WebSocket::MsgType::Text, as_bytes(text));
+            Status rc = ws.send(Ws::MsgType::Text, as_bytes(text));
             if (!rc) return rc;
-            if (has_body) rc = ws.send(WebSocket::MsgType::Binary, resp.body);
+            if (has_body) rc = ws.send(Ws::MsgType::Binary, resp.body);
             return rc;
         }
 
-        std::optional<WebSocket> Listener::rendezvous_connect(const std::string& address)
+        template <class D>
+        std::optional<typename Listener<D>::Ws> Listener<D>::rendezvous_connect(
+            const std::string& address)
         {
             Result<Url> u = url_parse(address);
             if (!u) return std::nullopt;
@@ -240,32 +251,32 @@ namespace vc
                     path += url_encode(token);
                 }
             }
-            Result<WebSocket> ws = ws_connect(u->host, u->port, path, "", kConnectTimeout);
+            Result<Ws> ws = dial_(u->host, u->port, path, "", kConnectTimeout);
             if (!ws) return std::nullopt;
             return std::move(*ws);
         }
 
-        Result<Bytes> Listener::read_body(WebSocket& ws, bool expected)
+        template <class D> Result<Bytes> Listener<D>::read_body(Ws& ws, bool expected)
         {
             if (!expected) return Bytes{};
-            Result<WebSocket::Message> m = ws.recv(kBodyTimeout);
+            Result<typename Ws::Message> m = ws.recv(kBodyTimeout);
             if (!m) return std::unexpected(m.error());
-            if (m->type != WebSocket::MsgType::Binary) return std::unexpected(Error::Protocol);
+            if (m->type != Ws::MsgType::Binary) return std::unexpected(Error::Protocol);
             return std::move(m->payload);
         }
 
-        void Listener::handle_rendezvous_offer(const std::string& address)
+        template <class D> void Listener<D>::handle_rendezvous_offer(const std::string& address)
         {
             emit("RENDEZVOUS", 0, address);
-            std::optional<WebSocket> rws = rendezvous_connect(address);
+            std::optional<Ws> rws = rendezvous_connect(address);
             if (!rws)
             {
                 emit("RENDEZVOUS_FAILED", 0, address);
                 return;
             }
 
-            Result<WebSocket::Message> m = rws->recv(kBodyTimeout);
-            if (m && m->type == WebSocket::MsgType::Text)
+            Result<typename Ws::Message> m = rws->recv(kBodyTimeout);
+            if (m && m->type == Ws::MsgType::Text)
             {
                 Result<Json> root = Json::parse(as_view(m->payload));
                 if (root)
@@ -277,7 +288,7 @@ namespace vc
             (void)rws->send_close(1000);
         }
 
-        RelayResponse Listener::invoke_handler(const RelayRequest& req)
+        template <class D> RelayResponse Listener<D>::invoke_handler(const RelayRequest& req)
         {
             RelayResponse resp;
             if (!cb_.on_request)
@@ -290,13 +301,14 @@ namespace vc
             return resp;
         }
 
-        Status Listener::deliver_response(WebSocket& ws, const ParsedRequest& pr,
-                                          const RelayResponse& resp, bool on_control)
+        template <class D>
+        Status Listener<D>::deliver_response(Ws& ws, const ParsedRequest& pr,
+                                             const RelayResponse& resp, bool on_control)
         {
             if (choose_response_channel(on_control, resp.body.size(), pr.has_address) ==
                 ResponseChannel::Rendezvous)
             {
-                std::optional<WebSocket> rws = rendezvous_connect(pr.address);
+                std::optional<Ws> rws = rendezvous_connect(pr.address);
                 if (rws)
                 {
                     Status src = send_response_over(*rws, pr.id, resp);
@@ -309,7 +321,8 @@ namespace vc
             return send_response_over(ws, pr.id, resp);
         }
 
-        void Listener::handle_request(WebSocket& ws, const Json& req_node, bool on_control)
+        template <class D>
+        void Listener<D>::handle_request(Ws& ws, const Json& req_node, bool on_control)
         {
             const ParsedRequest pr = parse_request_node(req_node);
 
@@ -353,7 +366,8 @@ namespace vc
                 emit("RESPONSE_SENT", resp.status_code, pr.target);
         }
 
-        void Listener::handle_control_message(std::span<const std::uint8_t> payload)
+        template <class D>
+        void Listener<D>::handle_control_message(std::span<const std::uint8_t> payload)
         {
             Result<Json> root = Json::parse(as_view(payload));
             if (!root)
@@ -377,7 +391,7 @@ namespace vc
             emit("CONTROL", 0, root->dump());
         }
 
-        Status Listener::run(const std::function<bool()>& stop)
+        template <class D> Status Listener<D>::run(const std::function<bool()>& stop)
         {
             unsigned backoff_ms = 1000;
 
@@ -406,20 +420,20 @@ namespace vc
                         next_ping_at_ = now + kPingInterval;
                     }
 
-                    Result<WebSocket::Message> m = ctrl_->recv(kRecvTickMs);
+                    Result<typename Ws::Message> m = ctrl_->recv(kRecvTickMs);
                     if (!m)
                     {
                         if (m.error() == Error::Timeout) continue;
                         emit("DISCONNECTED", static_cast<int>(m.error()), "control channel lost");
                         break;
                     }
-                    if (m->type == WebSocket::MsgType::Close)
+                    if (m->type == Ws::MsgType::Close)
                     {
                         emit("DISCONNECTED", static_cast<int>(Error::Closed),
                              "control channel lost");
                         break;
                     }
-                    if (m->type == WebSocket::MsgType::Text) handle_control_message(m->payload);
+                    if (m->type == Ws::MsgType::Text) handle_control_message(m->payload);
                 }
 
                 if (ctrl_)
@@ -431,16 +445,42 @@ namespace vc
             emit("STOPPED", 0, "listener stopped");
             return {};
         }
+        /* The production dialler: a real TCP connect, TLS handshake and
+         * WebSocket upgrade. */
+        struct TlsDialler
+        {
+            using websocket_type = WebSocket;
+
+            Result<WebSocket> operator()(const std::string& host, int port,
+                                         const std::string& path_and_query,
+                                         std::string_view extra_headers, int timeout_ms) const
+            {
+                return ws_connect(host, port, path_and_query, extra_headers, timeout_ms);
+            }
+        };
     } // namespace
 
-    Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
-                        const std::function<bool()>& stop_requested)
+    template <class Dialler>
+    Status relay_listen_with(const RelayConfig& cfg, const RelayCallbacks& cb, Dialler dialler,
+                             const std::function<bool()>& stop_requested)
     {
         if (cfg.namespace_host.empty() || cfg.hybrid_connection.empty())
             return std::unexpected(Error::InvalidArg);
 
-        Socket::global_init();
-        Listener listener(cfg, cb);
+        Listener<Dialler> listener(cfg, cb, std::move(dialler));
         return listener.run(stop_requested);
+    }
+
+    /* Instantiated for the scripted dialler so vc-selftest can drive the
+     * state machine; the production path below uses TlsDialler directly. */
+    template Status relay_listen_with<ScriptedDialler>(const RelayConfig&, const RelayCallbacks&,
+                                                       ScriptedDialler,
+                                                       const std::function<bool()>&);
+
+    Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
+                        const std::function<bool()>& stop_requested)
+    {
+        Socket::global_init();
+        return relay_listen_with(cfg, cb, TlsDialler{}, stop_requested);
     }
 } // namespace vc

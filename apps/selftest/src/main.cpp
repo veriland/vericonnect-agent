@@ -30,6 +30,8 @@
 #include "vc/vc_ws.h"
 #include "vc/vc_scripted_transport.h"
 #include "vc/vc_http.h"
+#include "vc/vc_relay.h"
+#include "vc/vc_relay_testing.h"
 
 namespace
 {
@@ -812,6 +814,312 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * Relay listener state machine, over a ScriptedDialler. Previously
+     * untestable: the listener dials new connections mid-stream, so the
+     * dialler had to be injectable, not just the transport.
+     * ------------------------------------------------------------------- */
+
+    /* A server->client text frame carrying JSON. */
+    std::vector<std::uint8_t> text_frame(std::string_view json)
+    {
+        return server_frame(0x1, true, json);
+    }
+
+    vc::RelayConfig test_relay_cfg()
+    {
+        vc::RelayConfig c;
+        c.namespace_host = "ns.servicebus.windows.net";
+        c.hybrid_connection = "hc";
+        c.key_name = "policy";
+        c.key = "c2VjcmV0";
+        return c;
+    }
+
+    /* Collect every client frame written to a wire. */
+    std::vector<ClientFrame> written_frames(const vc::ScriptedWire& wire)
+    {
+        std::vector<ClientFrame> out;
+        std::span<const std::uint8_t> rest(wire.outgoing());
+        while (!rest.empty())
+        {
+            auto f = decode_client_frame(rest);
+            if (!f) break;
+            rest = rest.subspan(f->total);
+            out.push_back(*f);
+        }
+        return out;
+    }
+
+    /* Reassemble a binary message from its frames. A body over kFragSize is
+     * fragmented, so looking for one large frame would miss it. */
+    std::string binary_message(const vc::ScriptedWire& wire)
+    {
+        std::string out;
+        bool collecting = false;
+        for (const auto& f : written_frames(wire))
+        {
+            if (f.opcode == 0x2)
+            {
+                out.clear();
+                out += f.payload;
+                collecting = !f.fin;
+                if (f.fin) return out;
+            }
+            else if (f.opcode == 0x0 && collecting)
+            {
+                out += f.payload;
+                if (f.fin) return out;
+            }
+        }
+        return out;
+    }
+
+    /* Text frames only, as strings - the JSON the listener sent. */
+    std::vector<std::string> written_text(const vc::ScriptedWire& wire)
+    {
+        std::vector<std::string> out;
+        for (const auto& f : written_frames(wire))
+            if (f.opcode == 0x1) out.push_back(f.payload);
+        return out;
+    }
+
+    /*
+     * Driving the listener to completion needs care. run() calls stop()
+     * several times per pass, so counting calls means nothing; and the
+     * WebSocket reads in 8 KB chunks, so the wire can be drained while whole
+     * frames are still buffered inside the WebSocket. The reliable signal is
+     * the listener's own event stream: once the scripted wire reaches EOF the
+     * control channel is lost and DISCONNECTED is emitted, which is exactly
+     * when the test should stop.
+     */
+    struct RelayRun
+    {
+        std::vector<std::string> events;
+        bool finished = false;
+
+        vc::RelayCallbacks::event_fn recorder()
+        {
+            return [this](std::string_view e, int, std::string_view)
+            {
+                events.emplace_back(e);
+                if (e == "DISCONNECTED" || e == "CONNECT_FAILED") finished = true;
+            };
+        }
+        [[nodiscard]] bool saw(std::string_view name) const
+        {
+            for (const auto& e : events)
+                if (e == name) return true;
+            return false;
+        }
+    };
+
+    void test_relay()
+    {
+        std::printf("Relay listener\n");
+        {
+            /* Bad config is rejected before anything is dialled. */
+            vc::ScriptedDialler d;
+            vc::RelayConfig empty;
+            vc::RelayCallbacks cb;
+            auto rc = vc::relay_listen_with(empty, cb, d, [] { return true; });
+            check("empty config rejected", !rc.has_value() && rc.error() == vc::Error::InvalidArg);
+            check("nothing dialled for bad config", d.dials().empty());
+        }
+        {
+            /* The control channel is dialled at the namespace host on 443,
+             * with a listen action and a SAS token in the query. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("listen returns success on stop", rc.has_value());
+            check("one dial made", d.dials().size() == 1);
+            if (!d.dials().empty())
+            {
+                const auto& dial = d.dials()[0];
+                check("dialled the namespace host", dial.host == "ns.servicebus.windows.net");
+                check("dialled 443", dial.port == 443);
+                check("control path is $hc", dial.path_and_query.starts_with("/$hc/hc?"));
+                check("listen action",
+                      dial.path_and_query.find("sb-hc-action=listen") != std::string::npos);
+                check("token present",
+                      dial.path_and_query.find("sb-hc-token=") != std::string::npos);
+            }
+            check("connected event emitted", run.saw("CONNECTED"));
+        }
+        {
+            /* A request on the control channel reaches the callback and its
+             * response goes back over the same channel. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame(
+                R"({"request":{"id":"r1","method":"POST","requestTarget":"/api/x","body":false}})")));
+            ctrl->set_eof();
+
+            std::string seen_method, seen_target, seen_id;
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest& req, vc::RelayResponse& resp)
+            {
+                seen_method = std::string(req.method);
+                seen_target = std::string(req.target);
+                seen_id = std::string(req.id);
+                resp.status_code = 200;
+                resp.status_desc = "OK";
+                resp.body = vc::Bytes{'o', 'k'};
+                return true;
+            };
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("relay run ok", rc.has_value());
+            check("callback saw the method", seen_method == "POST");
+            check("callback saw the target", seen_target == "/api/x");
+            check("callback saw the id", seen_id == "r1");
+            check("response sent event", run.saw("RESPONSE_SENT"));
+
+            bool found_response = false;
+            for (const auto& t : written_text(*ctrl))
+                if (t.find("\"response\"") != std::string::npos &&
+                    t.find("\"r1\"") != std::string::npos && t.find("200") != std::string::npos)
+                    found_response = true;
+            check("response written to the control channel", found_response);
+
+            bool body_frame = false;
+            for (const auto& f : written_frames(*ctrl))
+                if (f.opcode == 0x2 && f.payload == "ok") body_frame = true;
+            check("body sent as a binary frame", body_frame);
+        }
+        {
+            /* No callback installed means 501, not silence. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame(
+                R"({"request":{"id":"r2","method":"GET","requestTarget":"/","body":false}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder(); /* on_request deliberately unset */
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            bool got501 = false;
+            for (const auto& t : written_text(*ctrl))
+                if (t.find("501") != std::string::npos) got501 = true;
+            check("missing handler answers 501", got501);
+        }
+        {
+            /* A large response is sent over a freshly dialled rendezvous
+             * connection, not squeezed down the control channel. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            auto rdv = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(
+                text_frame(R"({"request":{"id":"r3","method":"GET","requestTarget":"/big",)"
+                           R"("body":false,"address":"wss://rdv.example.test:443/path"}})")));
+            ctrl->set_eof();
+
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest&, vc::RelayResponse& resp)
+            {
+                resp.status_code = 200;
+                resp.body.assign(70 * 1024, 'B'); /* over the 60 KB control cap */
+                return true;
+            };
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("rendezvous dialled for a large body", d.dials().size() == 2);
+            if (d.dials().size() == 2)
+            {
+                check("rendezvous host from the address", d.dials()[1].host == "rdv.example.test");
+                check("rendezvous port from the address", d.dials()[1].port == 443);
+            }
+            /* 70 KB is over kFragSize, so it arrives as several frames. */
+            const std::string on_rdv = binary_message(*rdv);
+            check("large body went over the rendezvous", on_rdv.size() == 70 * 1024);
+            check("large body intact", on_rdv == std::string(70 * 1024, 'B'));
+            check("rendezvous body was fragmented", written_frames(*rdv).size() > 2);
+            check("large body did not go over the control channel", binary_message(*ctrl).empty());
+        }
+        {
+            /* A small response stays on the control channel even when an
+             * address is offered - the size cap is what decides. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(
+                text_frame(R"({"request":{"id":"r4","method":"GET","requestTarget":"/small",)"
+                           R"("body":false,"address":"wss://rdv.example.test:443/path"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest&, vc::RelayResponse& resp)
+            {
+                resp.status_code = 200;
+                resp.body = vc::Bytes{'s'};
+                return true;
+            };
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("small response makes no extra dial", d.dials().size() == 1);
+            check("small response still answered", run.saw("RESPONSE_SENT"));
+        }
+        {
+            /* An accept offer is reported and ignored, never answered. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(
+                std::span<const std::uint8_t>(text_frame(R"({"accept":{"address":"wss://x/y"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("accept offer ignored", run.saw("ACCEPT_IGNORED"));
+            check("accept made no extra dial", d.dials().size() == 1);
+        }
+        {
+            /* Unparsable control traffic is reported, not fatal. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame("{not json")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("bad control JSON reported", run.saw("PROTOCOL"));
+            check("bad control JSON is not fatal", rc.has_value());
+        }
+        {
+            /* A request with neither method nor address is rejected. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(
+                std::span<const std::uint8_t>(text_frame(R"({"request":{"id":"r5"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("method-less, address-less request rejected", run.saw("REQUEST_ERROR"));
+            check("no rendezvous attempted", d.dials().size() == 1);
+        }
+        {
+            /* A failed control dial is reported and does not spin. */
+            vc::ScriptedDialler d;
+            d.fail_next_dial();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("failed dial reported", run.saw("CONNECT_FAILED"));
+            check("failed dial still returns success on stop", rc.has_value());
+            check("failed dial was attempted", d.dials().size() == 1);
+        }
+    }
+
 } // namespace
 
 int main()
@@ -828,6 +1136,7 @@ int main()
     test_ws_recv();
     test_ws_send();
     test_http();
+    test_relay();
     std::printf("==========================\n");
     if (g_failed)
     {
