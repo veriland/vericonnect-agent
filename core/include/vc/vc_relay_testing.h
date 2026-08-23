@@ -10,20 +10,10 @@
 /*
  * vc_relay_testing.h - drive the relay listener without a network.
  *
- * The listener does not merely read and write one connection: it dials new
- * ones mid-stream, because a response larger than the control channel's cap
- * goes out over a fresh rendezvous connection. So a transport alone is not
- * enough to test it - the thing that has to be injected is the *dialler*.
- *
- * ScriptedDialler hands out pre-scripted WebSockets in order and records what
- * was dialled, so a test can assert both the bytes exchanged and which
- * endpoints the listener decided to open.
- *
- *   auto d = vc::ScriptedDialler();
- *   auto ctrl = d.expect_dial();          // wire for the control channel
- *   ctrl->push_incoming(text_frame(R"({"request":{...}})"));
- *   ctrl->set_eof();
- *   (void)vc::relay_listen_with(cfg, cb, d, stop_after_one_pass);
+ * The listener dials new connections mid-stream for large responses, so a
+ * test must inject the dialler, not just a transport. ScriptedDialler hands
+ * out pre-scripted connections in order and records what was dialled. See
+ * apps/selftest for use.
  */
 #ifndef VC_RELAY_TESTING_H
 #define VC_RELAY_TESTING_H

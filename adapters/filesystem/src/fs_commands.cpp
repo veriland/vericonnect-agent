@@ -178,10 +178,10 @@ namespace fs_cmd
         int status = 200;
         std::string desc = std::format("File {} read successfully", *path);
 
-        /* A failed mkdir surfaces as a failed move just below. */
+        /* A failed mkdir surfaces as a failed move below. */
         if (!vc::fs::dir_exists(copy_dir)) (void)vc::fs::mkdir(copy_dir);
 
-        vc::Status archived; /* default-constructed = success, for the 409 path */
+        vc::Status archived; /* default-constructed = success (409 path) */
         if (vc::fs::file_exists(dest))
         {
             if (overwrite)
@@ -200,10 +200,8 @@ namespace fs_cmd
             archived = vc::fs::move(*path, dest);
         }
 
-        /* The read itself succeeded and Data is returned either way. But if the
-         * archive move failed the source file is still sitting in the polled
-         * folder, so it will be read again on the next poll - reporting 200 here
-         * would hide a duplicate-delivery bug. */
+        /* Data is returned either way, but a failed archive leaves the file in
+         * the polled folder to be read again next poll: report it. */
         if (status == 200 && !archived)
         {
             status = 500;

@@ -279,8 +279,7 @@ namespace
     }
 
     /* ---------------------------------------------------------------------
-     * WebSocket framing, driven by a ScriptedWire instead of a network. None
-     * of this code had any coverage before the transport seam existed.
+     * RFC 6455 framing, driven by a ScriptedWire instead of a network.
      * ------------------------------------------------------------------- */
 
     using WS = vc::WebSocketT<vc::ScriptedTransport>;
@@ -358,8 +357,8 @@ namespace
         return f;
     }
 
-    /* A wire that has already answered the upgrade, with the handshake
-     * request cleared so outgoing() shows only what the test triggers. */
+    /* A wire past the upgrade, handshake request cleared so outgoing() shows
+     * only what the test triggers. */
     std::optional<WS> upgraded(const WirePtr& wire)
     {
         wire->push_incoming("HTTP/1.1 101 Switching Protocols\r\n"
@@ -468,8 +467,7 @@ namespace
                   m && std::string(m->payload.begin(), m->payload.end()) == "Hello!");
         }
         {
-            /* A ping is answered with a pong carrying the same payload, and
-             * never surfaces to the caller. */
+            /* Ping is answered with a matching pong, never surfaced. */
             auto wire = std::make_shared<vc::ScriptedWire>();
             auto ws = upgraded(wire);
             auto ping = server_frame(0x9, true, "pp");
@@ -539,8 +537,7 @@ namespace
                   m && m->payload.size() == 1000 && m->type == WS::MsgType::Binary);
         }
         {
-            /* An orderly close mid-message is an error, not a truncated
-             * message silently returned as success. */
+            /* Orderly close mid-message is an error, not a short message. */
             auto wire = std::make_shared<vc::ScriptedWire>();
             auto ws = upgraded(wire);
             auto a = server_frame(0x1, false, "Hel");
@@ -567,8 +564,7 @@ namespace
             check("no trailing bytes", f && f->total == wire->outgoing().size());
         }
         {
-            /* Masking must actually vary: the same payload twice must not
-             * produce identical bytes on the wire. */
+            /* The same payload twice must not produce identical wire bytes. */
             auto wire = std::make_shared<vc::ScriptedWire>();
             auto ws = upgraded(wire);
             check("first send", ws->send(WS::MsgType::Text, bytes("same")).has_value());
@@ -609,8 +605,8 @@ namespace
             check("mid payload round-trips", f && f->payload == mid);
         }
         {
-            /* Over the fragment size the message is split, first frame
-             * carrying the opcode and only the last one FIN. */
+            /* Over kFragSize: split, opcode on the first frame, FIN on the
+             * last. */
             auto wire = std::make_shared<vc::ScriptedWire>();
             auto ws = upgraded(wire);
             const std::string huge(150 * 1024, 'z');
@@ -658,8 +654,7 @@ namespace
     }
 
     /* ---------------------------------------------------------------------
-     * HTTP response parsing, over a ScriptedWire. The chunked decoder and
-     * the status-line parser had no coverage before the transport seam.
+     * HTTP request shape and response parsing, over a ScriptedWire.
      * ------------------------------------------------------------------- */
 
     vc::http::Request basic_request(std::string_view method = "GET")
@@ -815,9 +810,7 @@ namespace
     }
 
     /* ---------------------------------------------------------------------
-     * Relay listener state machine, over a ScriptedDialler. Previously
-     * untestable: the listener dials new connections mid-stream, so the
-     * dialler had to be injectable, not just the transport.
+     * Relay listener state machine, over a ScriptedDialler.
      * ------------------------------------------------------------------- */
 
     /* A server->client text frame carrying JSON. */
@@ -851,8 +844,7 @@ namespace
         return out;
     }
 
-    /* Reassemble a binary message from its frames. A body over kFragSize is
-     * fragmented, so looking for one large frame would miss it. */
+    /* Reassemble a binary message; a body over kFragSize arrives fragmented. */
     std::string binary_message(const vc::ScriptedWire& wire)
     {
         std::string out;
@@ -885,13 +877,10 @@ namespace
     }
 
     /*
-     * Driving the listener to completion needs care. run() calls stop()
-     * several times per pass, so counting calls means nothing; and the
-     * WebSocket reads in 8 KB chunks, so the wire can be drained while whole
-     * frames are still buffered inside the WebSocket. The reliable signal is
-     * the listener's own event stream: once the scripted wire reaches EOF the
-     * control channel is lost and DISCONNECTED is emitted, which is exactly
-     * when the test should stop.
+     * Stop on the listener's own events, not on a call count: run() calls
+     * stop() several times per pass, and the wire can read as drained while
+     * whole frames are still buffered inside the WebSocket. EOF on the wire
+     * loses the control channel, which emits DISCONNECTED.
      */
     struct RelayRun
     {
@@ -927,8 +916,7 @@ namespace
             check("nothing dialled for bad config", d.dials().empty());
         }
         {
-            /* The control channel is dialled at the namespace host on 443,
-             * with a listen action and a SAS token in the query. */
+            /* Control channel: namespace host on 443, listen action, token. */
             vc::ScriptedDialler d;
             auto ctrl = d.expect_dial();
             ctrl->set_eof();
@@ -952,8 +940,8 @@ namespace
             check("connected event emitted", run.saw("CONNECTED"));
         }
         {
-            /* A request on the control channel reaches the callback and its
-             * response goes back over the same channel. */
+            /* A control-channel request reaches the callback; the response
+             * goes back the same way. */
             vc::ScriptedDialler d;
             auto ctrl = d.expect_dial();
             ctrl->push_incoming(std::span<const std::uint8_t>(text_frame(
@@ -1010,8 +998,7 @@ namespace
             check("missing handler answers 501", got501);
         }
         {
-            /* A large response is sent over a freshly dialled rendezvous
-             * connection, not squeezed down the control channel. */
+            /* A large response goes over a freshly dialled rendezvous. */
             vc::ScriptedDialler d;
             auto ctrl = d.expect_dial();
             auto rdv = d.expect_dial();
@@ -1045,7 +1032,7 @@ namespace
         }
         {
             /* A small response stays on the control channel even when an
-             * address is offered - the size cap is what decides. */
+             * address is offered: the size cap decides. */
             vc::ScriptedDialler d;
             auto ctrl = d.expect_dial();
             ctrl->push_incoming(std::span<const std::uint8_t>(
@@ -1107,7 +1094,7 @@ namespace
             check("no rendezvous attempted", d.dials().size() == 1);
         }
         {
-            /* A failed control dial is reported and does not spin. */
+            /* A failed dial is reported and does not spin. */
             vc::ScriptedDialler d;
             d.fail_next_dial();
             RelayRun run;

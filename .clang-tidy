@@ -1,15 +1,10 @@
-# VeriConnect clang-tidy configuration.
+# VeriConnect clang-tidy configuration. Enforced on every PR by
+# .github/workflows/ci.yml over core/, adapters/ and platform/posix/.
 #
-# Non-blocking in CI to begin with (see .github/workflows/ci.yml): the job
-# reports findings without failing the build, so the list can be worked down
-# before it becomes a gate.
-#
-# Broad cppcoreguidelines-* is deliberately NOT enabled. The pointer
-# arithmetic in the WebSocket framing and the base64 / SHA-256 codecs, and the
-# reinterpret_cast byte views used to move between string_view and
-# span<const uint8_t>, are intrinsic to the design - those checks would
-# produce noise rather than signal. The rules picked here are the ones that
-# map onto DESIGN.md §2-§4 and can be acted on.
+# Broad cppcoreguidelines-* is not enabled: the pointer arithmetic in the
+# WebSocket framing and the base64 / SHA-256 codecs, and the reinterpret_cast
+# byte views between string_view and span<const uint8_t>, are intrinsic to the
+# design. The rules below are the ones that can be acted on.
 ---
 Checks: >
   -*,
@@ -31,18 +26,13 @@ Checks: >
   readability-const-return-type,
   readability-redundant-string-cstr,
 
-# Three bugprone checks are off for reasons specific to this tree, not
-# because they are disliked:
-#
-#   branch-clone      - the duplicated arms are deliberate: an unknown URL
-#                       scheme defaults to the TLS port, and log::Level::Succ
-#                       is defined to log at Info.
-#   exception-escape   - the code does not throw, but std containers can, so
-#                       this fires on main() and on any function touching a
-#                       container. Nothing actionable follows.
-#   unused-return-value - [[nodiscard]] plus -Wunused-result already enforces
-#                       this properly, and honours the explicit (void) casts
-#                       that mark a deliberate discard. This check does not.
+# Three bugprone checks are off for reasons specific to this tree:
+#   branch-clone        deliberate duplicate arms (unknown URL scheme defaults
+#                       to the TLS port; log::Level::Succ logs at Info).
+#   exception-escape    fires on anything touching a std container in a
+#                       codebase that does not throw.
+#   unused-return-value [[nodiscard]] with -Wunused-result already covers this
+#                       and honours the explicit (void) casts; this does not.
 
 # Empty: nothing is promoted to an error yet.
 WarningsAsErrors: ''

@@ -27,9 +27,8 @@ namespace vc
 
         explicit Impl(Socket s) noexcept : sock(std::move(s)) {}
 
-        /* Owns raw OpenSSL handles freed in the destructor, so copying
-         * or moving it would double-free. It only ever lives in a
-         * unique_ptr (DESIGN.md §2). */
+        /* Owns raw OpenSSL handles freed in the destructor; copying would
+         * double-free. Only ever held by unique_ptr. */
         Impl(const Impl&) = delete;
         Impl& operator=(const Impl&) = delete;
         Impl(Impl&&) = delete;

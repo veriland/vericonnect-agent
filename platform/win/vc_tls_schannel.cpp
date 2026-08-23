@@ -51,9 +51,8 @@ namespace vc
 
         explicit Impl(Socket s) noexcept : sock(std::move(s)) {}
 
-        /* Owns a security context and credentials handle released in the
-         * destructor, so copying or moving it would release them twice.
-         * It only ever lives in a unique_ptr (DESIGN.md §2). */
+        /* Owns a security context and credentials released in the destructor;
+         * copying would release them twice. Only ever held by unique_ptr. */
         Impl(const Impl&) = delete;
         Impl& operator=(const Impl&) = delete;
         Impl(Impl&&) = delete;

@@ -103,8 +103,7 @@ namespace vc
             return std::unexpected(Error::Io);
 
         /* read the 101 response header block */
-        /* Honour the caller's budget for the 101 response; kHdrTimeout is
-         * only the fallback when no timeout was given. */
+        /* Caller's budget for the 101 response; kHdrTimeout if none given. */
         const std::uint64_t hdr_budget =
             timeout_ms > 0 ? static_cast<std::uint64_t>(timeout_ms) : kHdrTimeout;
         std::uint64_t deadline = os::monotonic_ms() + hdr_budget;
@@ -344,11 +343,8 @@ namespace vc
         in_.clear();
         closed_ = true;
     }
-    /* ------------------------------------------------------------------
-     * Explicit instantiations. Keeping these here means the template
-     * definitions stay in this translation unit instead of moving into the
-     * public header, so core/ headers remain SDK-free (DESIGN.md §4).
-     * ---------------------------------------------------------------- */
+    /* Explicit instantiations keep the definitions above in this translation
+     * unit instead of in the public header. */
     template class WebSocketT<Tls>;
     template class WebSocketT<ScriptedTransport>;
 

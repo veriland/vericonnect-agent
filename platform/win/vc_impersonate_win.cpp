@@ -37,9 +37,8 @@ namespace vc
 
         Impl() = default;
 
-        /* Reverts the thread token in its destructor, so a copy would revert
-         * twice - once for an identity it never established. It only ever
-         * lives in a unique_ptr (DESIGN.md §2). */
+        /* Reverts the thread token in its destructor; a copy would revert an
+         * identity it never established. Only ever held by unique_ptr. */
         Impl(const Impl&) = delete;
         Impl& operator=(const Impl&) = delete;
         Impl(Impl&&) = delete;
