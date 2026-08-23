@@ -37,7 +37,7 @@ namespace vc
 {
     namespace
     {
-        constexpr std::size_t kCtrlBodyMax = std::size_t{60} * 1024; /* response via control ch */
+        constexpr std::size_t kCtrlBodyMax = std::size_t{60} * 1024; /* control ch. */
         constexpr int kRecvTickMs = 1000;
         constexpr std::uint64_t kPingInterval = 30000;
         constexpr int kConnectTimeout = 20000;
@@ -54,9 +54,8 @@ namespace vc
                                                  s.size());
         }
 
-        /* The fields the listener actually uses out of a "request" node. The
-         * string_views point into the Json it was parsed from, which outlives
-         * every use here. */
+        /* Fields the listener uses from a "request" node. The views point into
+         * the Json it was parsed from, which outlives every use here. */
         struct ParsedRequest
         {
             std::string_view id;
@@ -89,15 +88,10 @@ namespace vc
             Rendezvous
         };
 
-        /*
-         * Where a response goes. The control channel caps a message at
-         * kCtrlBodyMax, so a larger body needs a rendezvous connection - but
-         * only if the service offered an address, and only if we are answering
-         * on the control channel in the first place (a response already being
-         * written to a rendezvous connection stays there).
-         *
-         * Pure, so it is tested directly rather than through the socket.
-         */
+        /* Where a response goes. Over kCtrlBodyMax needs a rendezvous
+         * connection, but only if the service offered an address and we are
+         * answering on the control channel; a response already going out over
+         * a rendezvous stays there. Pure, so it is tested directly. */
         ResponseChannel choose_response_channel(bool on_control, std::size_t body_size,
                                                 bool has_address) noexcept
         {
@@ -109,8 +103,7 @@ namespace vc
         template <class Dialler> class Listener
         {
         public:
-            /* The WebSocket type this dialler hands out: WebSocket in
-             * production, WebSocketT<ScriptedTransport> under test. */
+            /* WebSocket in production, WebSocketT<ScriptedTransport> in tests. */
             using Ws = typename Dialler::websocket_type;
 
             Listener(const RelayConfig& cfg, const RelayCallbacks& cb, Dialler dialler)
@@ -315,8 +308,8 @@ namespace vc
                     (void)rws->send_close(1000);
                     return src;
                 }
-                /* No rendezvous available: try the control channel anyway
-                 * rather than dropping the response entirely. */
+                /* No rendezvous: answer on the control channel rather than
+                 * drop the response. */
             }
             return send_response_over(ws, pr.id, resp);
         }
@@ -409,10 +402,9 @@ namespace vc
                 backoff_ms = 1000;
                 emit("CONNECTED", 200, "listening on control channel");
 
-                /* ctrl_connect() succeeded, so ctrl_ is engaged for the whole
-                 * of this inner loop. Binding it once makes that invariant
-                 * structural instead of an unchecked optional dereference on
-                 * every use; the guard states it rather than assuming it. */
+                /* ctrl_connect() succeeded, so ctrl_ is engaged for this whole
+                 * loop. Bind it once rather than dereference the optional on
+                 * every use. */
                 if (!ctrl_)
                 {
                     emit("DISCONNECTED", static_cast<int>(Error::Fail),
@@ -457,8 +449,7 @@ namespace vc
             emit("STOPPED", 0, "listener stopped");
             return {};
         }
-        /* The production dialler: a real TCP connect, TLS handshake and
-         * WebSocket upgrade. */
+        /* Production dialler: real TCP connect, TLS handshake, upgrade. */
         struct TlsDialler
         {
             using websocket_type = WebSocket;
@@ -483,8 +474,8 @@ namespace vc
         return listener.run(stop_requested);
     }
 
-    /* Instantiated for the scripted dialler so vc-selftest can drive the
-     * state machine; the production path below uses TlsDialler directly. */
+    /* Instantiated for the scripted dialler so vc-selftest can drive the state
+     * machine; the production path below uses TlsDialler directly. */
     template Status relay_listen_with<ScriptedDialler>(const RelayConfig&, const RelayCallbacks&,
                                                        ScriptedDialler,
                                                        const std::function<bool()>&);

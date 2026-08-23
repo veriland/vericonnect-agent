@@ -178,7 +178,7 @@ namespace vc::http
     }
 
     /* Explicit instantiations keep the definition above in this translation
-     * unit, so vc_http.h stays free of implementation (DESIGN.md §4). */
+     * unit, so vc_http.h stays free of implementation. */
     template Result<Response> exchange<Tls>(Tls&, const Request&);
     template Result<Response> exchange<ScriptedTransport>(ScriptedTransport&, const Request&);
 

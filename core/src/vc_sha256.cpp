@@ -38,7 +38,6 @@ namespace vc
     void Sha256::block(const std::uint8_t* p) noexcept
     {
         std::uint32_t w[64];
-        /* size_t index: i * 4 must not be computed in int and then widened. */
         for (std::size_t i = 0; i < 16; i++)
             w[i] = static_cast<std::uint32_t>(p[i * 4]) << 24 |
                    static_cast<std::uint32_t>(p[i * 4 + 1]) << 16 |

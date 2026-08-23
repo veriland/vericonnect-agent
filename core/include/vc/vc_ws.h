@@ -10,17 +10,11 @@
 /*
  * vc_ws.h - RFC 6455 WebSocket client over any vc::Transport.
  * Messages are reassembled from fragments; ping/pong is handled internally
- * by recv().
+ * by recv(). WebSocket is the production instantiation over vc::Tls.
  *
- * The class is templated on its transport so the framing can be driven from
- * a scripted in-memory transport in tests (see vc_scripted_transport.h) with
- * no network. WebSocket is the production instantiation over vc::Tls.
- *
- * Construction is deliberately split (DESIGN.md §8): upgrade() performs the
- * HTTP/1.1 upgrade over a transport that is already connected, while
- * ws_connect() is the convenience wrapper that dials a TCP socket, wraps it
- * in TLS and then upgrades. Only the wrapper knows how to open a connection,
- * so a test never has to.
+ * Construction is split: upgrade() runs the HTTP/1.1 upgrade over an
+ * already-connected transport, ws_connect() dials and wraps in TLS first.
+ * Keeping the dial in one place is what makes the framing testable.
  */
 #ifndef VC_WS_H
 #define VC_WS_H
@@ -61,10 +55,10 @@ namespace vc
         WebSocketT(const WebSocketT&) = delete;
         WebSocketT& operator=(const WebSocketT&) = delete;
 
-        /* Perform the HTTP/1.1 upgrade over an already-connected transport.
-         * host fills the Host header; path_and_query e.g.
+        /* HTTP/1.1 upgrade over an already-connected transport, which it takes
+         * ownership of. host fills the Host header; path_and_query e.g.
          * "/$hc/name?sb-hc-action=listen"; extra_headers is optional
-         * "Header: value\r\n" lines. Takes ownership of the transport. */
+         * "Header: value\r\n" lines. */
         [[nodiscard]] static Result<WebSocketT> upgrade(T transport, const std::string& host,
                                                         const std::string& path_and_query,
                                                         std::string_view extra_headers,
@@ -103,8 +97,8 @@ namespace vc
     /* The production WebSocket: RFC 6455 over TLS. */
     using WebSocket = WebSocketT<Tls>;
 
-    /* Dial host:port, wrap it in TLS and upgrade. The only entry point that
-     * opens a connection, which is what keeps WebSocketT itself testable. */
+    /* Dial host:port, wrap in TLS, upgrade. The only entry point here that
+     * opens a connection. */
     [[nodiscard]] Result<WebSocket> ws_connect(const std::string& host, int port,
                                                const std::string& path_and_query,
                                                std::string_view extra_headers, int timeout_ms);

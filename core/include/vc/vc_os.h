@@ -41,8 +41,8 @@ namespace vc::os
         int millisecond; /* 0-999                */
     };
 
-    /* Current local time. Exists so the localtime_r / localtime_s split stays
-     * in the platform layer instead of leaking into portable code. */
+    /* Current local time. Keeps the localtime_r / localtime_s split in the
+     * platform layer. */
     [[nodiscard]] LocalTime local_time() noexcept;
 
     /* Filename extension for a shared library on this platform, leading dot

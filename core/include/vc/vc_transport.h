@@ -8,16 +8,12 @@
  */
 
 /*
- * vc_transport.h - the byte-stream a protocol runs over.
+ * vc_transport.h - the byte stream a protocol runs over.
  *
- * The WebSocket, HTTP and relay layers are written against this concept
- * rather than against vc::Tls directly, so a test can drive them from a
- * scripted in-memory transport with no network. See DESIGN.md §4: the set of
- * implementations is known at build time, so this is compile-time
- * polymorphism and costs nothing at runtime - there is no vtable in the
- * framing path.
- *
- * vc::Tls and vc::Socket both satisfy it.
+ * The WebSocket, HTTP and relay layers are written against this concept, not
+ * against vc::Tls, so tests can drive them from an in-memory transport. Every
+ * implementation is known at build time, so dispatch stays static: no vtable
+ * in the framing path.
  */
 #ifndef VC_TRANSPORT_H
 #define VC_TRANSPORT_H

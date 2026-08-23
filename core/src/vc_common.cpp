@@ -62,9 +62,8 @@ extern "C"
 
 namespace vc
 {
-    /* DESIGN.md §4: the two real transports must satisfy the Transport
-     * concept. Asserted here so a signature drift in either platform layer
-     * fails the build rather than only the templated protocol code. */
+    /* Asserted here so a signature drift in either platform layer fails the
+     * build with a clear message, not deep inside the protocol templates. */
     static_assert(Transport<Tls>, "vc::Tls must satisfy vc::Transport");
     static_assert(Transport<Socket>, "vc::Socket must satisfy vc::Transport");
 } // namespace vc

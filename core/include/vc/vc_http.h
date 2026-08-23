@@ -46,17 +46,13 @@ namespace vc::http
         int timeout_ms = 30000;
     };
 
-    /*
-     * Run one request/response exchange over an already-connected transport,
-     * which is borrowed rather than owned. Split out from request() so the
-     * response parser - status line, headers, Content-Length and chunked
-     * bodies - can be tested without a network (DESIGN.md §8).
-     */
+    /* One request/response exchange over an already-connected transport, which
+     * is borrowed, not owned. Split from request() so the response parser can
+     * be tested without a network. */
     template <Transport T>
     [[nodiscard]] Result<Response> exchange(T& transport, const Request& req);
 
-    /* Perform a single HTTPS request: dial, wrap in TLS, exchange. The only
-     * entry point here that opens a connection. */
+    /* A single HTTPS request: dial, wrap in TLS, exchange. */
     [[nodiscard]] Result<Response> request(const Request& req);
 } // namespace vc::http
 

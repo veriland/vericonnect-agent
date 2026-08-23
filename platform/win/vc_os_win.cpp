@@ -35,8 +35,7 @@ namespace vc::os
 
     LocalTime local_time() noexcept
     {
-        /* GetLocalTime already carries milliseconds, so this needs neither
-         * localtime_s nor _ftime_s. */
+        /* GetLocalTime carries milliseconds; no localtime_s / _ftime_s. */
         SYSTEMTIME st;
         GetLocalTime(&st);
         return LocalTime{static_cast<int>(st.wYear),        static_cast<int>(st.wMonth),

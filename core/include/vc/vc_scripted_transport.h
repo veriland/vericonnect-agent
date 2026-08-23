@@ -8,27 +8,15 @@
  */
 
 /*
- * vc_scripted_transport.h - an in-memory vc::Transport for tests.
+ * vc_scripted_transport.h - in-memory vc::Transport for tests.
  *
- * Queue the bytes a peer would send, run the protocol code against it, then
- * inspect what it wrote. Nothing touches the network, so the WebSocket
- * framing and the relay state machine can be exercised in vc-selftest.
+ * Queue what a peer would send, run the protocol code, inspect what it wrote.
+ * The buffers sit in a separate ScriptedWire because protocol objects take
+ * their transport by value: once moved in it is out of the test's reach, so
+ * the test keeps the wire. See apps/selftest for use.
  *
- * The buffers live in a separately owned ScriptedWire because protocol
- * objects take their transport by value: once a ScriptedTransport has been
- * moved into a WebSocketT the test can no longer reach it, so the test holds
- * the wire instead and keeps feeding and inspecting it from outside.
- *
- *   auto wire = std::make_shared<vc::ScriptedWire>();
- *   wire->push_incoming("HTTP/1.1 101 ...");
- *   auto ws = WS::upgrade(vc::ScriptedTransport(wire), "h", "/p", "", 5000);
- *   wire->clear_outgoing();
- *   (void)ws->send_ping();
- *   // wire->outgoing() now holds the ping frame
- *
- * This lives in core/ rather than in the test binary because WebSocketT is
- * explicitly instantiated for it in vc_ws.cpp, which keeps the template
- * definitions out of the public headers (DESIGN.md §4 insulation).
+ * It lives in core/ because vc_ws.cpp instantiates WebSocketT for it, which
+ * is what keeps the template definitions out of the public headers.
  */
 #ifndef VC_SCRIPTED_TRANSPORT_H
 #define VC_SCRIPTED_TRANSPORT_H
@@ -66,8 +54,7 @@ namespace vc
             out_.clear();
         }
 
-        /* Once the queue drains, report an orderly close rather than a
-         * timeout. */
+        /* Once drained, report an orderly close rather than a timeout. */
         void set_eof() noexcept
         {
             eof_ = true;
@@ -104,10 +91,9 @@ namespace vc
         bool fail_send_ = false;
     };
 
-    /* A vc::Transport view onto a ScriptedWire. Cheap to copy and to move;
-     * every copy refers to the same wire. A default-constructed one holds no
-     * wire and reports valid() == false, which is itself useful for testing
-     * the "transport is dead" paths. */
+    /* A vc::Transport view onto a ScriptedWire; every copy shares the wire. A
+     * default-constructed one holds none and reports valid() == false, which
+     * is useful for the "transport is dead" paths. */
     class ScriptedTransport
     {
     public:

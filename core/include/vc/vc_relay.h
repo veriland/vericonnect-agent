@@ -79,10 +79,9 @@ namespace vc
                                       const std::function<bool()>& stop_requested);
 
     /*
-     * As relay_listen, but with the dialler injected. The listener opens new
-     * connections mid-stream for large responses, so the dialler - not just a
-     * transport - is what a test has to substitute. See vc_relay_testing.h for
-     * ScriptedDialler; production code wants relay_listen above.
+     * As relay_listen, with the dialler injected. The listener opens new
+     * connections mid-stream for large responses, so the dialler is what a
+     * test substitutes; see vc_relay_testing.h. Production wants relay_listen.
      */
     template <class Dialler>
     [[nodiscard]] Status relay_listen_with(const RelayConfig& cfg, const RelayCallbacks& cb,
