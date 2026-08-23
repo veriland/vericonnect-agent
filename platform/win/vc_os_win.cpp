@@ -32,4 +32,21 @@ namespace vc::os
                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG);
         return s == 0 ? Status{} : std::unexpected(Error::Fail);
     }
+
+    LocalTime local_time() noexcept
+    {
+        /* GetLocalTime already carries milliseconds, so this needs neither
+         * localtime_s nor _ftime_s. */
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        return LocalTime{static_cast<int>(st.wYear),        static_cast<int>(st.wMonth),
+                         static_cast<int>(st.wDay),         static_cast<int>(st.wHour),
+                         static_cast<int>(st.wMinute),      static_cast<int>(st.wSecond),
+                         static_cast<int>(st.wMilliseconds)};
+    }
+
+    const char* shared_library_extension() noexcept
+    {
+        return ".dll";
+    }
 } // namespace vc::os
