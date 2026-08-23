@@ -2,8 +2,6 @@
 #include "vc/vc_ini.h"
 #include "vc/vc_fs.h"
 
-#include <cstring>
-
 namespace vc
 {
     namespace

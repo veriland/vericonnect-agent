@@ -10,8 +10,6 @@
 #include "vc/vc_os.h"
 
 #include <array>
-#include <cctype>
-#include <cstring>
 #include <optional>
 
 namespace vc
