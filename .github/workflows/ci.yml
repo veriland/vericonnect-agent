@@ -5,8 +5,9 @@ name: CI
 # the design rules in DESIGN.md. Merges into main are gated on this workflow
 # succeeding.
 #
-# There is a .clang-tidy in the repo root for local runs, but no clang-tidy
-# job: see DESIGN.md section 8 for why it is not wired up yet.
+# The clang-tidy job is clean and blocking. It analyses the library only -
+# core/, adapters/ and platform/posix/ - not apps/, which are hosting glue and
+# the test binary; see .clang-tidy and DESIGN.md section 7.
 
 on:
   pull_request:
@@ -95,6 +96,38 @@ jobs:
             echo "OK: every core/ header compiles standalone"
           fi
           exit $fail
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        # clang and clang-tidy must be the SAME major version: clang-tidy uses
+        # clang's frontend, so a compile_commands.json produced by a different
+        # compiler makes it parse standard library internals it does not
+        # understand and report thousands of system-header diagnostics instead
+        # of findings in our code.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libssl-dev \
+                                  clang-18 clang-tidy-18
+
+      - name: Configure (export compile commands)
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy on the library
+        run: |
+          set -euo pipefail
+          # apps/ is excluded: agent-win is Windows-only, and the hosts and
+          # vc-selftest are glue where the checks report little of value.
+          files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'platform/posix/*.cpp')
+          echo "Analysing $(echo "$files" | wc -l) files"
+          clang-tidy-18 --quiet -p build $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})

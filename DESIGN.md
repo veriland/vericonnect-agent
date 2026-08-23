@@ -185,81 +185,64 @@ below.
 
 ## 8. Adoption status
 
-The tree already follows §2, §3 (minus `[[nodiscard]]`), §4 and §6
-closely. The open items, roughly in order of value:
+Every item first listed here is done. The tree follows §1–§6, and §7 now
+checks §1 and part of §2–§4 mechanically.
 
-- [ ] **Testability of the protocol layer.** `vc_ws`, `vc_http` and
-      `vc_relay` bind directly to concrete `vc::Socket`/`vc::Tls`, so
-      they cannot be exercised without a real network. This is why
-      `vc-selftest` covers only the pure leaf modules — SHA-256,
-      base64, JSON, URL, INI — and none of the WebSocket framing,
-      HTTP parsing or relay state machine, which is the most intricate
-      and highest-risk code in the project. This is the single
-      highest-value change available.
+- [x] **Testability of the protocol layer.** `vc::Transport` is a concept
+      satisfied by `vc::Tls` and `vc::Socket`; `WebSocketT`, the HTTP
+      client's `exchange()` and the relay's `Listener` are written
+      against it. `vc-selftest` now covers the WebSocket framing, the
+      HTTP response parser and the relay state machine — roughly 120
+      checks over code that previously had none.
 
-      The agreed design is compile-time polymorphism (§4): a
-      `vc::Transport` concept satisfied by `vc::Tls`, with `WebSocket`
-      and the HTTP client templated on it and a mock transport in
-      `vc-selftest`. Two prerequisites, both worth doing on their own
-      merits:
-
-      - `Socket::send` returns `Result<std::size_t>` while `Tls::send`
-        returns `Status`, so they do not satisfy one concept today. No
-        call site uses the count — every one tests it as a boolean —
-        and the declaration already promises to send all bytes, so the
-        count is redundant. Normalise on `Status`.
-      - `WebSocket::connect` and `vc::http::request` dial the socket
-        themselves. Construction has to be inverted — an `upgrade()`
-        taking an already-connected transport, with `connect()` kept as
-        the convenience wrapper — or a mock can never get in.
-
-      Note the relay needs more than a transport: `rendezvous_connect`
-      opens *new* connections mid-stream, so it also needs the dialler
-      injected, as a second concept or a callable.
+      Two things turned out differently from the plan. The template
+      definitions did *not* have to move into public headers:
+      `ScriptedTransport` is a library type, so each template is
+      explicitly instantiated for it in the same translation unit and
+      §4's insulation is intact. And the relay needed its *dialler*
+      injected, not just a transport, because it opens rendezvous
+      connections mid-stream.
 - [x] **`[[nodiscard]]` on the 37 fallible declarations** in
       `core/include/vc/`. Sixteen of the seventeen discards it found
       were best-effort and are now explicit `(void)` casts; the
       seventeenth was a real bug in the filesystem adapter's `ReadFile`,
       whose unchecked archive move could report 200 while leaving the
       file in the polled folder to be read again.
-- [ ] **Single responsibility in `handle_request`.** `relay_listen` is
-      a thin wrapper over a `Listener` class that is already decomposed
-      into nine short methods — `ctrl_connect`, `renew_token_if_due`,
-      `read_body`, `handle_control_message` and the rest are all 8–26
-      lines. The outliers are `handle_request` at 98 lines, which mixes
-      request parsing, the control-vs-rendezvous size decision, body
-      reading and dispatch, and `run` at 55. Splitting the decision
-      from the I/O in `handle_request` is what makes it testable once
-      the transport seam exists.
+- [x] **Single responsibility in `handle_request`**, down from 98 lines
+      to 43. The control-versus-rendezvous size decision is now a pure
+      function, which is what made it checkable.
 - [x] **Enforce the layering rule in CI** — the `design-rules` job
       greps for `platform/`, `adapters/` and `apps/` includes inside
-      `core/` and compiles each of the 19 `core/` headers on its own
-      against nothing but the standard library.
-- [ ] **Get `clang-tidy` running in CI.** A `.clang-tidy` with a
-      focused check set is in the repo root and is usable locally, but
-      there is no CI job yet: two attempts failed for environment
-      reasons rather than findings. Configuring with g++-13 made
-      clang-tidy parse libstdc++ internals through clang's frontend and
-      report 305000+ warnings from system headers; configuring with
-      clang instead then failed with `no member named 'unexpected' in
-      namespace 'std'`, i.e. `<expected>` unavailable, so C++23 library
-      support is not reaching it. Diagnose locally with clang-tidy
-      installed before spending more CI runs on it — a permanently red
-      non-blocking job is worse than no job.
+      `core/` and compiles each `core/` header on its own against
+      nothing but the standard library.
+- [x] **`clang-tidy`**, clean and blocking, over `core/`, `adapters/`
+      and `platform/posix/`. Getting there took diagnosing it locally
+      rather than through CI runs: clang-tidy uses clang's frontend, so
+      the compilation database has to come from the *same major version*
+      of clang or it reports standard library internals instead of our
+      code.
 
-      Broad `cppcoreguidelines-*` stays deliberately disabled whenever
-      it does land: the pointer arithmetic in the framing and codec
-      paths and the `reinterpret_cast` byte views are intrinsic to the
-      design, so those checks are noise rather than signal here.
-- [ ] **Two `#ifdef _WIN32` leaks in `core/`** (§1). `vc_log.cpp`
-      selects `localtime_s`/`_ftime_s` against
-      `localtime_r`/`gettimeofday` and pulls in `<windows.h>` to do it;
-      `vc_adapter.cpp` picks the `.dll`/`.dylib`/`.so` suffix. The first
-      is the real one — it puts an SDK include in the portable layer,
-      and belongs behind a `vc::os` clock helper implemented per
-      platform. The second is only a compile-time constant, and is
-      arguably not worth moving.
-- [ ] **`core/CMakeLists.txt`'s header comment is stale** — it says
-      "platform independent C11" for a C++23 tree.
+      Broad `cppcoreguidelines-*` stays off: the pointer arithmetic in
+      the framing and codec paths and the `reinterpret_cast` byte views
+      are intrinsic to the design, so those checks are noise here.
+      Three `bugprone-*` checks are off for reasons recorded in
+      `.clang-tidy`, and `apps/` is out of scope as hosting glue and
+      tests.
+
+      What it found and what was fixed: three Pimpl types
+      (`Tls::Impl` on both platforms, `Impersonation::Impl` on Windows)
+      had destructors releasing OS handles but no deleted copy or move,
+      so a copy would have released them twice — the rule-of-five
+      violation §2 exists to prevent. Also an unchecked `std::optional`
+      dereference in the relay's run loop, and two `int` multiplications
+      widened to `size_t` in the SHA-256 core.
+- [x] **Two `#ifdef _WIN32` leaks in `core/`** — `vc_log.cpp`'s
+      `localtime_s`/`_ftime_s` split (now `os::local_time()`) and
+      `vc_adapter.cpp`'s library suffix (now
+      `os::shared_library_extension()`). The only conditional left in
+      `core/` is the ABI export macro in `vc_adapter.h`, which §1
+      records as legitimate and permanent.
+- [x] **`core/CMakeLists.txt`'s header comment**, which described the
+      tree as "platform independent C11".
 - [x] **`.clang-format` said `Standard: c++20`** on a C++23 tree. Now
       `Latest`; clang-format has no `c++23` enumerator.

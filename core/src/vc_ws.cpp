@@ -29,7 +29,7 @@ namespace vc
 {
     namespace
     {
-        constexpr std::size_t kFragSize = 60 * 1024;
+        constexpr std::size_t kFragSize = std::size_t{60} * 1024;
         constexpr std::uint64_t kMaxMsg = 64ull * 1024 * 1024; /* sanity cap 64 MB */
         constexpr int kHdrTimeout = 15000;
 

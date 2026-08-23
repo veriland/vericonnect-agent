@@ -37,7 +37,7 @@ namespace vc
 {
     namespace
     {
-        constexpr std::size_t kCtrlBodyMax = 60 * 1024; /* response via control ch */
+        constexpr std::size_t kCtrlBodyMax = std::size_t{60} * 1024; /* response via control ch */
         constexpr int kRecvTickMs = 1000;
         constexpr std::uint64_t kPingInterval = 30000;
         constexpr int kConnectTimeout = 20000;
@@ -83,7 +83,7 @@ namespace vc
             return pr;
         }
 
-        enum class ResponseChannel
+        enum class ResponseChannel : std::uint8_t
         {
             Control,
             Rendezvous
@@ -134,7 +134,7 @@ namespace vc
             }
 
             Status ctrl_connect();
-            void renew_token_if_due();
+            void renew_token_if_due(Ws& ctrl);
 
             Json build_response_msg(std::string_view request_id, const RelayResponse& resp,
                                     bool has_body);
@@ -147,7 +147,7 @@ namespace vc
             RelayResponse invoke_handler(const RelayRequest& req);
             Status deliver_response(Ws& ws, const ParsedRequest& pr, const RelayResponse& resp,
                                     bool on_control);
-            void handle_control_message(std::span<const std::uint8_t> payload);
+            void handle_control_message(Ws& ctrl, std::span<const std::uint8_t> payload);
 
             const RelayConfig& cfg_;
             const RelayCallbacks& cb_;
@@ -176,7 +176,7 @@ namespace vc
             return {};
         }
 
-        template <class D> void Listener<D>::renew_token_if_due()
+        template <class D> void Listener<D>::renew_token_if_due(Ws& ctrl)
         {
             if (os::monotonic_ms() < token_renew_at_) return;
             std::string token = make_token();
@@ -186,7 +186,7 @@ namespace vc
             root.set("renewToken", Json::object().set("token", Json::string(token)));
             std::string msg = root.dump();
 
-            if (ctrl_->send(Ws::MsgType::Text, as_bytes(msg)))
+            if (ctrl.send(Ws::MsgType::Text, as_bytes(msg)))
             {
                 token_renew_at_ =
                     os::monotonic_ms() + static_cast<std::uint64_t>(ttl_) * 1000 * 3 / 4;
@@ -367,7 +367,7 @@ namespace vc
         }
 
         template <class D>
-        void Listener<D>::handle_control_message(std::span<const std::uint8_t> payload)
+        void Listener<D>::handle_control_message(Ws& ctrl, std::span<const std::uint8_t> payload)
         {
             Result<Json> root = Json::parse(as_view(payload));
             if (!root)
@@ -378,7 +378,7 @@ namespace vc
 
             if (const Json* req = root->find_ci("request"))
             {
-                handle_request(*ctrl_, *req, true);
+                handle_request(ctrl, *req, true);
                 return;
             }
             if (root->find_ci("accept"))
@@ -409,18 +409,30 @@ namespace vc
                 backoff_ms = 1000;
                 emit("CONNECTED", 200, "listening on control channel");
 
+                /* ctrl_connect() succeeded, so ctrl_ is engaged for the whole
+                 * of this inner loop. Binding it once makes that invariant
+                 * structural instead of an unchecked optional dereference on
+                 * every use; the guard states it rather than assuming it. */
+                if (!ctrl_)
+                {
+                    emit("DISCONNECTED", static_cast<int>(Error::Fail),
+                         "control channel vanished after connect");
+                    continue;
+                }
+                Ws& ctrl = *ctrl_;
+
                 while (!stop())
                 {
-                    renew_token_if_due();
+                    renew_token_if_due(ctrl);
 
                     std::uint64_t now = os::monotonic_ms();
                     if (now >= next_ping_at_)
                     {
-                        (void)ctrl_->send_ping();
+                        (void)ctrl.send_ping();
                         next_ping_at_ = now + kPingInterval;
                     }
 
-                    Result<typename Ws::Message> m = ctrl_->recv(kRecvTickMs);
+                    Result<typename Ws::Message> m = ctrl.recv(kRecvTickMs);
                     if (!m)
                     {
                         if (m.error() == Error::Timeout) continue;
@@ -433,12 +445,12 @@ namespace vc
                              "control channel lost");
                         break;
                     }
-                    if (m->type == Ws::MsgType::Text) handle_control_message(m->payload);
+                    if (m->type == Ws::MsgType::Text) handle_control_message(ctrl, m->payload);
                 }
 
                 if (ctrl_)
                 {
-                    if (stop()) (void)ctrl_->send_close(1000);
+                    if (stop()) (void)ctrl.send_close(1000);
                     ctrl_.reset();
                 }
             }
