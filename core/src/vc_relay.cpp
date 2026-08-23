@@ -23,6 +23,7 @@
  *  - Tokens are renewed proactively with {"renewToken":{"token":..}}.
  */
 #include "vc/vc_relay.h"
+#include "vc/vc_log.h"
 #include "vc/vc_relay_testing.h"
 #include "vc/vc_ws.h"
 #include "vc/vc_sas.h"
@@ -380,8 +381,11 @@ namespace vc
                      "WebSocket accept offers are not supported by this listener");
                 return;
             }
-            /* token renew confirmations etc. are informational */
-            emit("CONTROL", 0, root->dump());
+            /* Token renew confirmations and the like. The payload goes out as
+             * an event, so keep it out of the Info stream. */
+            emit("CONTROL", 0, "control message received");
+            if (log::enabled(log::Level::Debug))
+                log::message(log::Level::Debug, "RELAY CONTROL payload: {}", root->dump());
         }
 
         template <class D> Status Listener<D>::run(const std::function<bool()>& stop)

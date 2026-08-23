@@ -18,6 +18,7 @@
 
 #ifdef __cplusplus
 
+#include <cstddef>
 #include <format>
 #include <string>
 #include <string_view>
@@ -50,15 +51,32 @@ namespace vc::log
     [[nodiscard]] Status init(const Config& cfg);
     void shutdown();
 
-    Level level_from_str(std::string_view s); /* "LOG_DEBUG" etc. */
+    [[nodiscard]] Level level_from_str(std::string_view s); /* "LOG_DEBUG" etc. */
 
-    /* Emit a preformatted message. */
+    /*
+     * Longest message written; anything longer is truncated with a marker. A
+     * log line must not be able to grow without bound, whatever a caller
+     * hands it.
+     */
+    constexpr std::size_t kMaxMessageBytes = 8192;
+
+    /* Would a message at this level be emitted? Cheap - call it before doing
+     * work that exists only to be logged. */
+    [[nodiscard]] bool enabled(Level lvl) noexcept;
+
+    /*
+     * Emit a preformatted message. Control characters are escaped so a payload
+     * cannot forge a log line, values of known secret keys are masked, and the
+     * result is truncated to kMaxMessageBytes.
+     */
     void write(Level lvl, std::string_view msg);
 
-    /* Emit a std::format-style message. */
+    /* Emit a std::format-style message. Formatting is skipped when the level is
+     * suppressed. */
     template <class... Args>
     void message(Level lvl, std::format_string<Args...> fmt, Args&&... args)
     {
+        if (!enabled(lvl)) return;
         write(lvl, std::vformat(fmt.get(), std::make_format_args(args...)));
     }
 } // namespace vc::log

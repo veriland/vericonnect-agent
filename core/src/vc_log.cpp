@@ -12,14 +12,29 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstdint>
+#include <mutex>
+#include <string>
 
 namespace vc::log
 {
     namespace
     {
+        /*
+         * One process-wide sink, so the state is shared and must be guarded:
+         * the run loop is not the only possible caller (a service control
+         * handler or a signal path can reach it too).
+         */
+        std::mutex g_mu;
         Config g_cfg;
         std::FILE* g_file = nullptr;
         bool g_init = false;
+        std::uint64_t g_written = 0; /* bytes in the current file */
+        bool g_file_broken = false;  /* reopen failed; reported once */
+
+        /* Query-string and JSON keys whose values must never reach the log. */
+        constexpr std::string_view kSecretKeys[] = {"sb-hc-token", "sig", "password", "accesskey",
+                                                    "sharedaccesssignature"};
 
         const char* level_tag(Level l)
         {
@@ -67,36 +82,175 @@ namespace vc::log
         void rotate_if_needed()
         {
             if (!g_file || g_cfg.max_file_size_mb <= 0) return;
-            long pos = std::ftell(g_file);
-            if (pos < static_cast<long>(g_cfg.max_file_size_mb) * 1024 * 1024) return;
+            /* 64-bit: max_file_size_mb * 1024 * 1024 overflows a 32-bit long
+             * on Windows for any setting above 2047. */
+            const std::uint64_t limit =
+                static_cast<std::uint64_t>(g_cfg.max_file_size_mb) * 1024u * 1024u;
+            if (g_written < limit) return;
 
             std::fclose(g_file);
             g_file = nullptr;
 
             const std::string& base = g_cfg.file_path;
-            int n = g_cfg.max_rotate_files > 0 ? g_cfg.max_rotate_files : 5;
-            std::string last = base + "." + std::to_string(n);
-            std::remove(last.c_str());
+            const int n = g_cfg.max_rotate_files > 0 ? g_cfg.max_rotate_files : 5;
+            std::remove((base + "." + std::to_string(n)).c_str());
             for (int i = n - 1; i >= 1; i--)
-            {
-                std::string from = base + "." + std::to_string(i);
-                std::string to = base + "." + std::to_string(i + 1);
-                std::rename(from.c_str(), to.c_str());
-            }
+                std::rename((base + "." + std::to_string(i)).c_str(),
+                            (base + "." + std::to_string(i + 1)).c_str());
             std::rename(base.c_str(), (base + ".1").c_str());
 
             g_file = std::fopen(base.c_str(), "ab");
+            g_written = 0;
+            if (!g_file && !g_file_broken)
+            {
+                /* Losing the file silently is worse than the rotation failing:
+                 * say so once on stderr and carry on with console output. */
+                g_file_broken = true;
+                std::fprintf(stderr,
+                             "vc::log: cannot reopen %s after rotation; "
+                             "file logging disabled\n",
+                             base.c_str());
+            }
         }
+
+        /* Escape control characters. A payload containing a newline could
+         * otherwise forge a timestamped log line. */
+        void append_escaped(std::string& out, std::string_view in)
+        {
+            for (char c : in)
+            {
+                const auto u = static_cast<unsigned char>(c);
+                if (u == '\n')
+                    out += "\\n";
+                else if (u == '\r')
+                    out += "\\r";
+                else if (u == '\t')
+                    out += "\\t";
+                else if (u < 0x20 || u == 0x7F)
+                {
+                    char esc[5];
+                    std::snprintf(esc, sizeof esc, "\\x%02X", u);
+                    out += esc;
+                }
+                else
+                    out += c;
+            }
+        }
+
+        bool starts_with_ci(std::string_view s, std::string_view prefix) noexcept
+        {
+            if (s.size() < prefix.size()) return false;
+            for (std::size_t i = 0; i < prefix.size(); i++)
+                if (std::tolower(static_cast<unsigned char>(s[i])) !=
+                    std::tolower(static_cast<unsigned char>(prefix[i])))
+                    return false;
+            return true;
+        }
+
+        /*
+         * Mask the value following any secret key, in either "key=value" (URL
+         * query) or "key":"value" (JSON) form. Applied at the sink so a
+         * careless call site cannot leak a credential.
+         */
+        std::string mask_secrets(std::string_view in)
+        {
+            std::string out;
+            out.reserve(in.size());
+            std::size_t i = 0;
+            while (i < in.size())
+            {
+                std::string_view rest = in.substr(i);
+                std::size_t key_len = 0;
+                for (std::string_view k : kSecretKeys)
+                    if (starts_with_ci(rest, k))
+                    {
+                        key_len = k.size();
+                        break;
+                    }
+                if (key_len == 0)
+                {
+                    out += in[i++];
+                    continue;
+                }
+
+                /* Only a key if a separator follows, allowing for a closing
+                 * quote and whitespace in the JSON form. */
+                std::size_t j = i + key_len;
+                if (j < in.size() && in[j] == '"') j++;
+                while (j < in.size() && (in[j] == ' ' || in[j] == '\t'))
+                    j++;
+                if (j >= in.size() || (in[j] != '=' && in[j] != ':'))
+                {
+                    out += in[i++];
+                    continue;
+                }
+                out.append(in.substr(i, j + 1 - i));
+                j++;
+
+                while (j < in.size() && (in[j] == ' ' || in[j] == '\t'))
+                    j++;
+                const bool quoted = j < in.size() && in[j] == '"';
+                if (quoted) j++;
+                const std::size_t start = j;
+                while (j < in.size() &&
+                       (quoted ? in[j] != '"'
+                               : (in[j] != '&' && in[j] != ',' && in[j] != '}' && in[j] != ' ')))
+                    j++;
+                if (j > start)
+                {
+                    if (quoted) out += '"';
+                    out += "***";
+                    if (quoted && j < in.size()) out += '"';
+                }
+                i = (quoted && j < in.size()) ? j + 1 : j;
+            }
+            return out;
+        }
+
+        /* Sink-side guarantees: mask, escape, then bound the length. */
+        std::string sanitise(std::string_view msg)
+        {
+            std::string escaped;
+            escaped.reserve(msg.size());
+            append_escaped(escaped, msg);
+            std::string out = mask_secrets(escaped);
+            if (out.size() > kMaxMessageBytes)
+            {
+                const std::size_t dropped = out.size() - kMaxMessageBytes;
+                out.resize(kMaxMessageBytes);
+                out += " ... [truncated " + std::to_string(dropped) + " bytes]";
+            }
+            return out;
+        }
+
     } // namespace
 
     Status init(const Config& cfg)
     {
-        shutdown();
+        std::lock_guard lock(g_mu);
+        if (g_file)
+        {
+            std::fclose(g_file);
+            g_file = nullptr;
+        }
         g_cfg = cfg;
+        g_written = 0;
+        g_file_broken = false;
         if (g_cfg.enabled && !g_cfg.file_path.empty())
         {
             g_file = std::fopen(g_cfg.file_path.c_str(), "ab");
-            if (!g_file) return std::unexpected(Error::Io);
+            if (!g_file)
+            {
+                g_init = true; /* console still works; report the file failure */
+                return std::unexpected(Error::Io);
+            }
+            /* Appending to an existing file: start rotation accounting from
+             * its current size, not from zero. */
+            if (std::fseek(g_file, 0, SEEK_END) == 0)
+            {
+                const long end = std::ftell(g_file);
+                if (end > 0) g_written = static_cast<std::uint64_t>(end);
+            }
         }
         g_init = true;
         return {};
@@ -104,12 +258,14 @@ namespace vc::log
 
     void shutdown()
     {
+        std::lock_guard lock(g_mu);
         if (g_file)
         {
             std::fclose(g_file);
             g_file = nullptr;
         }
         g_init = false;
+        g_written = 0;
     }
 
     Level level_from_str(std::string_view s)
@@ -122,37 +278,50 @@ namespace vc::log
         return Level::Info;
     }
 
+    bool enabled(Level lvl) noexcept
+    {
+        std::lock_guard lock(g_mu);
+        if (!g_init) return true; /* pre-init messages go to stderr */
+        if (!g_cfg.enabled) return false;
+        const Level eff = (lvl == Level::Succ) ? Level::Info : lvl;
+        return eff >= g_cfg.level;
+    }
+
     void write(Level lvl, std::string_view msg)
     {
+        const std::string text = sanitise(msg);
+
+        std::lock_guard lock(g_mu);
         if (!g_init)
         {
-            /* not initialised: still echo to stderr so nothing is lost */
-            std::fprintf(stderr, "%.*s\n", static_cast<int>(msg.size()), msg.data());
+            /* Not initialised: still echo to stderr so nothing is lost. */
+            std::fprintf(stderr, "%s\n", text.c_str());
             return;
         }
         if (!g_cfg.enabled) return;
-        Level eff = (lvl == Level::Succ) ? Level::Info : lvl;
+        const Level eff = (lvl == Level::Succ) ? Level::Info : lvl;
         if (eff < g_cfg.level) return;
 
-        std::string ts = timestamp();
+        const std::string ts = timestamp();
 
         if (g_cfg.console)
         {
+            /* Diagnostics on stderr, so a caller can separate them from
+             * ordinary output. */
+            std::FILE* out = (eff >= Level::Warn) ? stderr : stdout;
             if (g_cfg.show_event_type)
-                std::printf("%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
-                            static_cast<int>(msg.size()), msg.data());
+                std::fprintf(out, "%s [%s] %s\n", ts.c_str(), level_tag(lvl), text.c_str());
             else
-                std::printf("%s %.*s\n", ts.c_str(), static_cast<int>(msg.size()), msg.data());
-            std::fflush(stdout);
+                std::fprintf(out, "%s %s\n", ts.c_str(), text.c_str());
+            std::fflush(out);
         }
         if (g_file)
         {
-            if (g_cfg.show_event_type)
-                std::fprintf(g_file, "%s [%s] %.*s\n", ts.c_str(), level_tag(lvl),
-                             static_cast<int>(msg.size()), msg.data());
-            else
-                std::fprintf(g_file, "%s %.*s\n", ts.c_str(), static_cast<int>(msg.size()),
-                             msg.data());
+            const int n =
+                g_cfg.show_event_type
+                    ? std::fprintf(g_file, "%s [%s] %s\n", ts.c_str(), level_tag(lvl), text.c_str())
+                    : std::fprintf(g_file, "%s %s\n", ts.c_str(), text.c_str());
+            if (n > 0) g_written += static_cast<std::uint64_t>(n);
             std::fflush(g_file);
             rotate_if_needed();
         }

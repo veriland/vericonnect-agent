@@ -11,6 +11,7 @@
  * vc-selftest - unit checks for the portable core.
  * Exit code 0 = all passed.
  */
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <memory>
@@ -32,6 +33,7 @@
 #include "vc/vc_http.h"
 #include "vc/vc_relay.h"
 #include "vc/vc_relay_testing.h"
+#include "vc/vc_log.h"
 
 namespace
 {
@@ -1107,6 +1109,101 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * Logger: the guarantees it makes at the sink.
+     * ------------------------------------------------------------------- */
+
+    /* Log one message to a temp file and return the file's contents. */
+    std::string log_once(vc::log::Level lvl, std::string_view msg, vc::log::Level threshold)
+    {
+        const std::string dir = vc::fs::exe_dir().value_or(".");
+        const std::string path = vc::fs::join(dir, "selftest-log.txt");
+        (void)vc::fs::remove_file(path);
+
+        vc::log::Config c;
+        c.level = threshold;
+        c.enabled = true;
+        c.console = false;
+        c.file_path = path;
+        c.show_event_type = true;
+        if (!vc::log::init(c)) return {};
+        vc::log::write(lvl, msg);
+        vc::log::shutdown();
+
+        auto bytes = vc::fs::read_all(path);
+        (void)vc::fs::remove_file(path);
+        if (!bytes) return {};
+        return std::string(bytes->begin(), bytes->end());
+    }
+
+    void test_logging()
+    {
+        std::printf("Logging\n");
+        using L = vc::log::Level;
+
+        /* A newline in a payload must not be able to forge a second line. */
+        {
+            const std::string out = log_once(L::Info, "first\nsecond", L::Trace);
+            check("message written", out.find("first") != std::string::npos);
+            check("newline escaped", out.find("first\\nsecond") != std::string::npos);
+            check("only one log line", std::count(out.begin(), out.end(), '\n') == 1);
+        }
+        /* Other control characters are escaped too. */
+        {
+            const std::string out = log_once(L::Info,
+                                             "a\tb\x01"
+                                             "c",
+                                             L::Trace);
+            check("tab escaped", out.find("a\\tb") != std::string::npos);
+            check("control byte escaped", out.find("\\x01") != std::string::npos);
+        }
+        /* Secrets are masked at the sink, whatever the call site does. */
+        {
+            const std::string out = log_once(
+                L::Info, "GET /$hc/x?sb-hc-action=listen&sb-hc-token=SharedAccessSig%2fabc&z=1",
+                L::Trace);
+            check("token value masked", out.find("SharedAccessSig%2fabc") == std::string::npos);
+            check("token key kept", out.find("sb-hc-token=***") != std::string::npos);
+            check("other params intact", out.find("sb-hc-action=listen") != std::string::npos);
+        }
+        {
+            const std::string out =
+                log_once(L::Info, R"({"Username":"u","Password":"hunter2","x":1})", L::Trace);
+            check("json password masked", out.find("hunter2") == std::string::npos);
+            check("json key kept", out.find("\"Password\":\"***\"") != std::string::npos);
+            check("json neighbours intact", out.find("\"Username\":\"u\"") != std::string::npos);
+        }
+        {
+            const std::string out = log_once(L::Info, "sig=abc123&next=2", L::Trace);
+            check("sig masked", out.find("abc123") == std::string::npos);
+            check("field after sig intact", out.find("next=2") != std::string::npos);
+        }
+        /* A long message is truncated rather than written whole. */
+        {
+            const std::string big(vc::log::kMaxMessageBytes * 3, 'x');
+            const std::string out = log_once(L::Info, big, L::Trace);
+            check("long message truncated", out.size() < big.size());
+            check("truncation is marked", out.find("[truncated") != std::string::npos);
+        }
+        /* Level filtering, and enabled() agreeing with it. */
+        {
+            const std::string out = log_once(L::Debug, "quiet", L::Error);
+            check("below-threshold message dropped", out.find("quiet") == std::string::npos);
+        }
+        {
+            vc::log::Config c;
+            c.level = L::Warn;
+            c.enabled = true;
+            c.console = false;
+            check("init with no file", vc::log::init(c).has_value());
+            check("enabled() false below threshold", !vc::log::enabled(L::Info));
+            check("enabled() true at threshold", vc::log::enabled(L::Warn));
+            check("enabled() true above threshold", vc::log::enabled(L::Error));
+            check("Succ filtered as Info", !vc::log::enabled(L::Succ));
+            vc::log::shutdown();
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1124,6 +1221,7 @@ int main()
     test_ws_send();
     test_http();
     test_relay();
+    test_logging();
     std::printf("==========================\n");
     if (g_failed)
     {
