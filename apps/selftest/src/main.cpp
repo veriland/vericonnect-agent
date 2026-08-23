@@ -29,6 +29,7 @@
 #include "vc/vc_adapter.h"
 #include "vc/vc_ws.h"
 #include "vc/vc_scripted_transport.h"
+#include "vc/vc_http.h"
 
 namespace
 {
@@ -654,6 +655,163 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * HTTP response parsing, over a ScriptedWire. The chunked decoder and
+     * the status-line parser had no coverage before the transport seam.
+     * ------------------------------------------------------------------- */
+
+    vc::http::Request basic_request(std::string_view method = "GET")
+    {
+        vc::http::Request r;
+        r.method = method;
+        r.host = "api.example.test";
+        r.port = 443;
+        r.path_and_query = "/v1/thing?a=b";
+        r.timeout_ms = 1000;
+        return r;
+    }
+
+    void test_http()
+    {
+        std::printf("HTTP client\n");
+        {
+            /* Request shape. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("200 parsed", resp.has_value());
+            check("status code", resp && resp->status == 200);
+            check("status text", resp && resp->status_text == "OK");
+            check("body", resp && std::string(resp->body.begin(), resp->body.end()) == "hi");
+            const std::string sent(wire->outgoing_text());
+            check("request line", sent.starts_with("GET /v1/thing?a=b HTTP/1.1\r\n"));
+            check("host header", sent.find("Host: api.example.test\r\n") != std::string::npos);
+            check("connection close", sent.find("Connection: close\r\n") != std::string::npos);
+            check("no content-length without a body",
+                  sent.find("Content-Length:") == std::string::npos);
+        }
+        {
+            /* A body adds Content-Length and a default Content-Type. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request("POST");
+            const std::string payload = "{\"k\":1}";
+            r.body = bytes(payload);
+            auto resp = vc::http::exchange(t, r);
+            check("201 parsed", resp && resp->status == 201);
+            const std::string sent(wire->outgoing_text());
+            check("content-length set", sent.find("Content-Length: 7\r\n") != std::string::npos);
+            check("default content-type json",
+                  sent.find("Content-Type: application/json\r\n") != std::string::npos);
+            check("body written", sent.ends_with(payload));
+        }
+        {
+            /* An explicit content type is honoured, and extra headers pass. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request("POST");
+            r.body = bytes("x");
+            r.content_type = "text/plain";
+            r.extra_headers = "X-Trace: abc\r\n";
+            auto resp = vc::http::exchange(t, r);
+            check("explicit exchange ok", resp.has_value());
+            const std::string sent(wire->outgoing_text());
+            check("content-type honoured",
+                  sent.find("Content-Type: text/plain\r\n") != std::string::npos);
+            check("extra header passed", sent.find("X-Trace: abc\r\n") != std::string::npos);
+        }
+        {
+            /* Chunked transfer encoding is decoded. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\n"
+                                "Transfer-Encoding: chunked\r\n\r\n"
+                                "5\r\nHello\r\n"
+                                "2\r\n, \r\n"
+                                "6\r\nworld!\r\n"
+                                "0\r\n\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("chunked parsed", resp.has_value());
+            check("chunked body reassembled",
+                  resp && std::string(resp->body.begin(), resp->body.end()) == "Hello, world!");
+        }
+        {
+            /* Chunk sizes are hex, not decimal: 0x10 == 16 bytes. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            const std::string sixteen = "0123456789abcdef";
+            wire->push_incoming("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                "10\r\n" +
+                                sixteen + "\r\n0\r\n\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("hex chunk size honoured",
+                  resp && std::string(resp->body.begin(), resp->body.end()) == sixteen);
+        }
+        {
+            /* Response arriving in dribbles across several reads. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 404 Not ");
+            wire->push_incoming("Found\r\nContent-Length: 3\r\n");
+            wire->push_incoming("\r\nabc");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("split response parsed", resp && resp->status == 404);
+            check("split status text", resp && resp->status_text == "Not Found");
+            check("split body", resp && std::string(resp->body.begin(), resp->body.end()) == "abc");
+        }
+        {
+            /* Header block never terminates: a protocol error, not a hang. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("unterminated headers rejected",
+                  !resp.has_value() && resp.error() == vc::Error::Protocol);
+        }
+        {
+            /* Not HTTP at all. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("GARBAGE\r\n\r\nbody");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("non-HTTP rejected", !resp.has_value() && resp.error() == vc::Error::Protocol);
+        }
+        {
+            /* A failed write surfaces instead of being mistaken for an empty
+             * response. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->fail_next_send();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("write failure propagates", !resp.has_value() && resp.error() == vc::Error::Io);
+        }
+        {
+            /* Headers are exposed to the caller. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nX-Thing: v\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("headers exposed", resp && resp->headers.find("X-Thing: v") != std::string::npos);
+            check("headers exclude the blank line",
+                  resp && resp->headers.find("\r\n\r\n") == std::string::npos);
+        }
+    }
+
 } // namespace
 
 int main()
@@ -669,6 +827,7 @@ int main()
     test_ws_upgrade();
     test_ws_recv();
     test_ws_send();
+    test_http();
     std::printf("==========================\n");
     if (g_failed)
     {

@@ -11,6 +11,8 @@
 #include "vc/vc_http.h"
 #include "vc/vc_tls.h"
 #include "vc/vc_os.h"
+#include "vc/vc_scripted_transport.h"
+#include "vc/vc_sock.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -95,13 +97,8 @@ namespace vc::http
         }
     } // namespace
 
-    Result<Response> request(const Request& req)
+    template <Transport T> Result<Response> exchange(T& transport, const Request& req)
     {
-        Result<Socket> sock = Socket::connect(std::string(req.host), req.port, req.timeout_ms);
-        if (!sock) return std::unexpected(Error::Io);
-        Result<Tls> tls = Tls::connect(std::move(*sock), std::string(req.host), req.timeout_ms);
-        if (!tls) return std::unexpected(Error::Tls);
-
         std::string request_head;
         request_head.append(req.method)
             .append(" ")
@@ -119,10 +116,10 @@ namespace vc::http
         request_head.append(req.extra_headers);
         request_head += "Connection: close\r\n\r\n";
 
-        if (!tls->send(std::span<const std::uint8_t>(
+        if (!transport.send(std::span<const std::uint8_t>(
                 reinterpret_cast<const std::uint8_t*>(request_head.data()), request_head.size())))
             return std::unexpected(Error::Io);
-        if (!req.body.empty() && !tls->send(req.body)) return std::unexpected(Error::Io);
+        if (!req.body.empty() && !transport.send(req.body)) return std::unexpected(Error::Io);
 
         /* Read until close (Connection: close) or Content-Length satisfied. */
         std::string in;
@@ -132,8 +129,8 @@ namespace vc::http
         {
             std::uint64_t now = os::monotonic_ms();
             if (now >= deadline) break;
-            auto n = tls->recv(std::span<std::uint8_t>(tmp, sizeof tmp),
-                               static_cast<int>(deadline - now));
+            auto n = transport.recv(std::span<std::uint8_t>(tmp, sizeof tmp),
+                                    static_cast<int>(deadline - now));
             if (!n || *n == 0) break;
             in.append(reinterpret_cast<const char*>(tmp), *n);
 
@@ -178,5 +175,19 @@ namespace vc::http
                              reinterpret_cast<const std::uint8_t*>(in.data() + in.size()));
         }
         return resp;
+    }
+
+    /* Explicit instantiations keep the definition above in this translation
+     * unit, so vc_http.h stays free of implementation (DESIGN.md §4). */
+    template Result<Response> exchange<Tls>(Tls&, const Request&);
+    template Result<Response> exchange<ScriptedTransport>(ScriptedTransport&, const Request&);
+
+    Result<Response> request(const Request& req)
+    {
+        Result<Socket> sock = Socket::connect(std::string(req.host), req.port, req.timeout_ms);
+        if (!sock) return std::unexpected(Error::Io);
+        Result<Tls> tls = Tls::connect(std::move(*sock), std::string(req.host), req.timeout_ms);
+        if (!tls) return std::unexpected(Error::Tls);
+        return exchange(*tls, req);
     }
 } // namespace vc::http
