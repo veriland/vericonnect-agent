@@ -3,7 +3,10 @@ name: CI
 # Runs on every pull request targeting main. Builds the project on Windows
 # and Linux, runs the core self-test, enforces clang-format style and checks
 # the design rules in DESIGN.md. Merges into main are gated on this workflow
-# succeeding - except the clang-tidy job, which reports without blocking.
+# succeeding.
+#
+# There is a .clang-tidy in the repo root for local runs, but no clang-tidy
+# job: see DESIGN.md section 8 for why it is not wired up yet.
 
 on:
   pull_request:
@@ -92,39 +95,6 @@ jobs:
             echo "OK: every core/ header compiles standalone"
           fi
           exit $fail
-
-  clang-tidy:
-    name: clang-tidy (non-blocking)
-    runs-on: ubuntu-latest
-    # Advisory for now: the check set in .clang-tidy is being worked down, so
-    # findings are reported but do not fail the PR. Remove once it is clean.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build clang clang-tidy libssl-dev
-
-      # Configure with clang, NOT gcc. clang-tidy uses clang's frontend, so a
-      # compile_commands.json written for g++ makes it parse libstdc++
-      # internals it does not understand - which reports tens of thousands of
-      # warnings and hard errors from system headers rather than findings in
-      # our code.
-      - name: Configure (export compile commands)
-        env:
-          CC: clang
-          CXX: clang++
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-      - name: Run clang-tidy on our sources
-        run: |
-          set -euo pipefail
-          files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'apps/*.cpp' 'platform/posix/*.cpp')
-          # --quiet drops the per-file "N warnings generated" summaries, which
-          # count suppressed system-header warnings and obscure the real list.
-          clang-tidy --quiet -p build $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})

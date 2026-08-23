@@ -235,12 +235,22 @@ closely. The open items, roughly in order of value:
       greps for `platform/`, `adapters/` and `apps/` includes inside
       `core/` and compiles each of the 19 `core/` headers on its own
       against nothing but the standard library.
-- [x] **`clang-tidy` with a focused check set**, non-blocking at
-      first, so §7 covers part of §2–§4 mechanically. Broad
-      `cppcoreguidelines-*` is deliberately not enabled: the pointer
-      arithmetic in the framing and codec paths and the
-      `reinterpret_cast` byte views are intrinsic to the design, so
-      those checks are noise rather than signal here.
+- [ ] **Get `clang-tidy` running in CI.** A `.clang-tidy` with a
+      focused check set is in the repo root and is usable locally, but
+      there is no CI job yet: two attempts failed for environment
+      reasons rather than findings. Configuring with g++-13 made
+      clang-tidy parse libstdc++ internals through clang's frontend and
+      report 305000+ warnings from system headers; configuring with
+      clang instead then failed with `no member named 'unexpected' in
+      namespace 'std'`, i.e. `<expected>` unavailable, so C++23 library
+      support is not reaching it. Diagnose locally with clang-tidy
+      installed before spending more CI runs on it — a permanently red
+      non-blocking job is worse than no job.
+
+      Broad `cppcoreguidelines-*` stays deliberately disabled whenever
+      it does land: the pointer arithmetic in the framing and codec
+      paths and the `reinterpret_cast` byte views are intrinsic to the
+      design, so those checks are noise rather than signal here.
 - [ ] **Two `#ifdef _WIN32` leaks in `core/`** (§1). `vc_log.cpp`
       selects `localtime_s`/`_ftime_s` against
       `localtime_r`/`gettimeofday` and pulls in `<windows.h>` to do it;
