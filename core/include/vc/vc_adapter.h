@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_adapter.h - adapter ABI + host-side loader.
  *
  * ABI (C, UTF-8, cdecl) exported by every adapter shared library:

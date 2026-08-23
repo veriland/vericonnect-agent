@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
 /* vc_ini.h - INI file reader/writer (Settings.ini). */
 #ifndef VC_INI_H
 #define VC_INI_H

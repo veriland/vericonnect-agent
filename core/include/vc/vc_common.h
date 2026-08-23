@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_common.h - shared basics for the VeriConnect code base.
  *
  * All strings crossing module boundaries are UTF-8 encoded. Platform layers

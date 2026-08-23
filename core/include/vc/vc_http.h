@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_http.h - minimal HTTPS/1.1 client (used by the sender side of the test
  * app to POST commands through the Azure Relay HTTP endpoint).
  */

@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_ws.h - RFC 6455 WebSocket client over vc::Tls.
  * Messages are reassembled from fragments; ping/pong is handled internally
  * by recv().
