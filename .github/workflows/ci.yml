@@ -104,15 +104,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install deps
-        # clang and clang-tidy must be the SAME major version: clang-tidy uses
-        # clang's frontend, so a compile_commands.json produced by a different
-        # compiler makes it parse standard library internals it does not
-        # understand and report thousands of system-header diagnostics instead
-        # of findings in our code.
+        # Two constraints, both learned the hard way:
+        #
+        # clang and clang-tidy must be the SAME major version, because
+        # clang-tidy uses clang's frontend.
+        #
+        # And libc++ is installed because clang-18 cannot provide
+        # std::expected against this image's libstdc++: the header is present
+        # but its feature guard evaluates false, so every vc::Result use
+        # becomes an error even with -std=gnu++23 and __cplusplus == 202302L.
+        # The build jobs use g++-13, which is unaffected; only this analysis
+        # job needs libc++.
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build libssl-dev \
-                                  clang-18 clang-tidy-18
+                                  clang-18 clang-tidy-18 libc++-18-dev libc++abi-18-dev
 
       - name: Configure (export compile commands)
         env:
@@ -136,7 +142,13 @@ jobs:
           echo '__cplusplus' | clang++-18 -std=gnu++23 -x c++ -E - | tail -1
           echo "--- does <expected> yield std::expected? ---"
           printf '#include <expected>\nstd::expected<int,int> e;\nint main(){}\n' > /tmp/x.cpp
-          clang++-18 -std=gnu++23 -fsyntax-only /tmp/x.cpp && echo "OK: std::expected available"
+          if clang++-18 -std=gnu++23 -stdlib=libc++ -fsyntax-only /tmp/x.cpp; then
+            echo "OK: std::expected available under libc++"
+          else
+            echo "std::expected NOT available under libc++ either"
+          fi
+          # Never fail the run here; the point is evidence for the step below.
+          exit 0
 
       - name: Run clang-tidy on the library
         run: |
@@ -150,7 +162,11 @@ jobs:
           # recorded flag is lost or downgraded. Without C++23 the libstdc++
           # <expected> header compiles to nothing and every vc::Result use
           # becomes an error.
-          clang-tidy-18 --quiet -p build --extra-arg=-std=c++23 $files
+          # -stdlib=libc++ for the reason in the install step. -std is forced
+          # too: the last -std on the command line wins, so this holds even if
+          # the recorded flag is ever lost or downgraded.
+          clang-tidy-18 --quiet -p build \
+            --extra-arg=-std=c++23 --extra-arg=-stdlib=libc++ $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})
