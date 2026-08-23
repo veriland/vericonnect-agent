@@ -99,6 +99,9 @@ namespace vc
                 out.push_back(static_cast<std::uint8_t>(acc >> bits));
             }
         }
+        /* 6 leftover bits cannot be part of any whole byte, so the input was
+         * truncated. Returning an empty success would hide that. */
+        if (bits == 6) return std::nullopt;
         return out;
     }
 } // namespace vc

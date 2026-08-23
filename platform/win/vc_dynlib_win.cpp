@@ -8,6 +8,8 @@
  */
 
 #include "vc/vc_adapter.h"
+#include "vc/vc_log.h"
+#include "vc/vc_os.h"
 
 #include <string>
 #include <windows.h>
@@ -51,7 +53,12 @@ namespace vc
     std::optional<DynLib> DynLib::open(const std::string& path)
     {
         HMODULE h = LoadLibraryW(utf8_to_wide(path).c_str());
-        if (!h) return std::nullopt;
+        if (!h)
+        {
+            log::message(log::Level::Warn, "LoadLibrary({}) failed: {}", path,
+                         os::last_error_text());
+            return std::nullopt;
+        }
         return DynLib(h);
     }
 

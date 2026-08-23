@@ -11,6 +11,7 @@
  * vc-selftest - unit checks for the portable core.
  * Exit code 0 = all passed.
  */
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <memory>
@@ -32,6 +33,7 @@
 #include "vc/vc_http.h"
 #include "vc/vc_relay.h"
 #include "vc/vc_relay_testing.h"
+#include "vc/vc_log.h"
 
 namespace
 {
@@ -111,6 +113,18 @@ namespace
               d && d->size() == 5 &&
                   std::string_view(reinterpret_cast<const char*>(d->data()), 5) == "fooba");
         check("decode invalid", !vc::base64_decode("!!!"));
+    }
+
+    void test_base64_strict()
+    {
+        std::printf("base64 strictness\n");
+        check("truncated single char rejected", !vc::base64_decode("A").has_value());
+        check("valid round trip", vc::base64_decode("aGk=").has_value());
+        check("two chars decode to one byte",
+              vc::base64_decode("aGk=") && vc::base64_decode("aGk=")->size() == 2);
+        check("data after padding rejected", !vc::base64_decode("aGk=a").has_value());
+        check("bad alphabet rejected", !vc::base64_decode("aG!k").has_value());
+        check("empty is valid", vc::base64_decode("") && vc::base64_decode("")->empty());
     }
 
     void test_json()
@@ -1107,6 +1121,201 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * Logger: the guarantees it makes at the sink.
+     * ------------------------------------------------------------------- */
+
+    /* Log one message to a temp file and return the file's contents. */
+    std::string log_once(vc::log::Level lvl, std::string_view msg, vc::log::Level threshold)
+    {
+        const std::string dir = vc::fs::exe_dir().value_or(".");
+        const std::string path = vc::fs::join(dir, "selftest-log.txt");
+        (void)vc::fs::remove_file(path);
+
+        vc::log::Config c;
+        c.level = threshold;
+        c.enabled = true;
+        c.console = false;
+        c.file_path = path;
+        c.show_event_type = true;
+        if (!vc::log::init(c)) return {};
+        vc::log::write(lvl, msg);
+        vc::log::shutdown();
+
+        auto bytes = vc::fs::read_all(path);
+        (void)vc::fs::remove_file(path);
+        if (!bytes) return {};
+        return std::string(bytes->begin(), bytes->end());
+    }
+
+    void test_logging()
+    {
+        std::printf("Logging\n");
+        using L = vc::log::Level;
+
+        /* A newline in a payload must not be able to forge a second line. */
+        {
+            const std::string out = log_once(L::Info, "first\nsecond", L::Trace);
+            check("message written", out.find("first") != std::string::npos);
+            check("newline escaped", out.find("first\\nsecond") != std::string::npos);
+            check("only one log line", std::count(out.begin(), out.end(), '\n') == 1);
+        }
+        /* Other control characters are escaped too. */
+        {
+            const std::string out = log_once(L::Info,
+                                             "a\tb\x01"
+                                             "c",
+                                             L::Trace);
+            check("tab escaped", out.find("a\\tb") != std::string::npos);
+            check("control byte escaped", out.find("\\x01") != std::string::npos);
+        }
+        /* Secrets are masked at the sink, whatever the call site does. */
+        {
+            const std::string out = log_once(
+                L::Info, "GET /$hc/x?sb-hc-action=listen&sb-hc-token=SharedAccessSig%2fabc&z=1",
+                L::Trace);
+            check("token value masked", out.find("SharedAccessSig%2fabc") == std::string::npos);
+            check("token key kept", out.find("sb-hc-token=***") != std::string::npos);
+            check("other params intact", out.find("sb-hc-action=listen") != std::string::npos);
+        }
+        {
+            const std::string out =
+                log_once(L::Info, R"({"Username":"u","Password":"hunter2","x":1})", L::Trace);
+            check("json password masked", out.find("hunter2") == std::string::npos);
+            check("json key kept", out.find("\"Password\":\"***\"") != std::string::npos);
+            check("json neighbours intact", out.find("\"Username\":\"u\"") != std::string::npos);
+        }
+        {
+            const std::string out = log_once(L::Info, "sig=abc123&next=2", L::Trace);
+            check("sig masked", out.find("abc123") == std::string::npos);
+            check("field after sig intact", out.find("next=2") != std::string::npos);
+        }
+        /* A long message is truncated rather than written whole. */
+        {
+            const std::string big(vc::log::kMaxMessageBytes * 3, 'x');
+            const std::string out = log_once(L::Info, big, L::Trace);
+            check("long message truncated", out.size() < big.size());
+            check("truncation is marked", out.find("[truncated") != std::string::npos);
+        }
+        /* Level filtering, and enabled() agreeing with it. */
+        {
+            const std::string out = log_once(L::Debug, "quiet", L::Error);
+            check("below-threshold message dropped", out.find("quiet") == std::string::npos);
+        }
+        {
+            vc::log::Config c;
+            c.level = L::Warn;
+            c.enabled = true;
+            c.console = false;
+            check("init with no file", vc::log::init(c).has_value());
+            check("enabled() false below threshold", !vc::log::enabled(L::Info));
+            check("enabled() true at threshold", vc::log::enabled(L::Warn));
+            check("enabled() true above threshold", vc::log::enabled(L::Error));
+            check("Succ filtered as Info", !vc::log::enabled(L::Succ));
+            vc::log::shutdown();
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * Bounded numeric parsing, used for anything arriving off the machine.
+     * ------------------------------------------------------------------- */
+
+    void test_parse_uint()
+    {
+        std::printf("parse_uint\n");
+        check("plain decimal", vc::parse_uint("42", 100) == 42u);
+        check("at the limit", vc::parse_uint("100", 100) == 100u);
+        check("over the limit rejected", !vc::parse_uint("101", 100).has_value());
+        check("empty rejected", !vc::parse_uint("", 100).has_value());
+        check("negative rejected", !vc::parse_uint("-1", 100).has_value());
+        check("plus rejected", !vc::parse_uint("+1", 100).has_value());
+        check("trailing junk rejected", !vc::parse_uint("12abc", 100).has_value());
+        check("leading space rejected", !vc::parse_uint(" 12", 100).has_value());
+        check("not a number rejected", !vc::parse_uint("abc", 100).has_value());
+        check("overflow rejected",
+              !vc::parse_uint("99999999999999999999999", 0xFFFFFFFFull).has_value());
+        check("hex base", vc::parse_uint("10", 100, 16) == 16u);
+        check("hex rejects decimal-only digits", !vc::parse_uint("1g", 100, 16).has_value());
+        check("zero accepted", vc::parse_uint("0", 100) == 0u);
+    }
+
+    void test_url_port()
+    {
+        std::printf("URL port validation\n");
+        {
+            auto u = vc::url_parse("wss://h.example:8443/p");
+            check("valid port parsed", u && u->port == 8443);
+        }
+        {
+            auto u = vc::url_parse("wss://h.example/p");
+            check("default port for wss", u && u->port == 443);
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:0/p");
+            check("port 0 rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:99999/p");
+            check("out-of-range port rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:-5/p");
+            check("negative port rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:80x/p");
+            check("junk port rejected", !u.has_value());
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * JSON numbers. Json::parse no longer copies the document, so a number
+     * token ending exactly at the end of the buffer is the case to prove.
+     * ------------------------------------------------------------------- */
+
+    void test_json_numbers()
+    {
+        std::printf("JSON numbers\n");
+        auto num = [](std::string_view t) -> std::optional<double>
+        {
+            auto j = vc::Json::parse(t);
+            if (!j || !j->is_number()) return std::nullopt;
+            return j->as_number();
+        };
+        check("integer", num("123") == 123.0);
+        check("negative", num("-7") == -7.0);
+        check("fraction", num("1.5") == 1.5);
+        check("exponent", num("2e3") == 2000.0);
+        check("negative exponent", num("5e-1") == 0.5);
+        check("zero", num("0") == 0.0);
+
+        /* Numbers flush against the end of the buffer, with no NUL to lean on. */
+        {
+            auto j = vc::Json::parse("[1,2,3]");
+            check("array of numbers", j && j->size() == 3);
+        }
+        {
+            auto j = vc::Json::parse(R"({"a":42})");
+            check("number at object end", j && j->get_num("a", 0) == 42.0);
+        }
+        {
+            /* string_view over a buffer with no terminator at all. */
+            const char raw[] = {'9', '9', '9'};
+            auto j = vc::Json::parse(std::string_view(raw, sizeof raw));
+            check("unterminated buffer parsed", j && j->as_number() == 999.0);
+        }
+        /* Malformed input must fail, not read past the end. */
+        check("truncated object rejected", !vc::Json::parse(R"({"a":1)").has_value());
+        check("truncated array rejected", !vc::Json::parse("[1,").has_value());
+        check("lone minus rejected", !vc::Json::parse("-").has_value());
+        check("trailing junk rejected", !vc::Json::parse("1 2").has_value());
+        /* A pathologically long number is rejected rather than mis-parsed. */
+        {
+            const std::string huge = "1" + std::string(600, '0');
+            check("over-long number rejected", !vc::Json::parse(huge).has_value());
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1115,8 +1324,12 @@ int main()
     test_sha256();
     test_hmac();
     test_base64();
+    test_base64_strict();
     test_json();
+    test_json_numbers();
     test_url();
+    test_parse_uint();
+    test_url_port();
     test_ini();
     test_adapter_roundtrip();
     test_ws_upgrade();
@@ -1124,6 +1337,7 @@ int main()
     test_ws_send();
     test_http();
     test_relay();
+    test_logging();
     std::printf("==========================\n");
     if (g_failed)
     {

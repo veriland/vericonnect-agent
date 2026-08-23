@@ -9,7 +9,10 @@
 
 #include "vc/vc_os.h"
 
+#include <cerrno>
+#include <cstring>
 #include <ctime>
+#include <string>
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -63,6 +66,22 @@ namespace vc::os
                          tmv.tm_min,
                          tmv.tm_sec,
                          static_cast<int>(tv.tv_usec / 1000)};
+    }
+
+    std::string last_error_text()
+    {
+        const int e = errno;
+        if (e == 0) return {};
+        char buf[256];
+        /* strerror_r's two incompatible signatures: use the portable subset by
+         * checking the return type at compile time. */
+        const char* msg = nullptr;
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+        msg = strerror_r(e, buf, sizeof buf);
+#else
+        msg = (strerror_r(e, buf, sizeof buf) == 0) ? buf : "unknown";
+#endif
+        return std::to_string(e) + ": " + (msg ? msg : "unknown");
     }
 
     const char* shared_library_extension() noexcept

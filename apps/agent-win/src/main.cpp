@@ -22,6 +22,8 @@
 #include <windows.h>
 #include <stdio.h>
 
+#include <atomic>
+
 #include "vc/vc_agent.h"
 #include "vc/vc_log.h"
 
@@ -31,7 +33,10 @@
 
 static SERVICE_STATUS_HANDLE g_status_handle;
 static SERVICE_STATUS g_status;
-static volatile bool g_stop = false;
+/* Written by the service control handler on another thread, read by the run
+ * loop. atomic rather than volatile, which gives neither atomicity nor
+ * ordering. */
+static std::atomic<bool> g_stop{false};
 
 /* ---------------------------------------------------------------- */
 /* Install / uninstall                                                */
@@ -143,7 +148,7 @@ static DWORD WINAPI svc_ctrl_handler(DWORD ctrl, DWORD event_type, LPVOID event_
     case SERVICE_CONTROL_STOP:
     case SERVICE_CONTROL_SHUTDOWN:
         set_state(SERVICE_STOP_PENDING, NO_ERROR);
-        g_stop = true;
+        g_stop.store(true, std::memory_order_relaxed);
         return NO_ERROR;
     case SERVICE_CONTROL_INTERROGATE:
         return NO_ERROR;
@@ -164,7 +169,8 @@ static void WINAPI svc_main(DWORD argc, LPWSTR* argv)
 
     vc::agent::Options opts;
     opts.verbose = false;
-    bool ok = vc::agent::run(opts, [] { return g_stop; }).has_value();
+    bool ok =
+        vc::agent::run(opts, [] { return g_stop.load(std::memory_order_relaxed); }).has_value();
 
     set_state(SERVICE_STOPPED, ok ? NO_ERROR : ERROR_SERVICE_SPECIFIC_ERROR);
 }
@@ -177,7 +183,7 @@ static BOOL WINAPI console_ctrl(DWORD type)
 {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT)
     {
-        g_stop = true;
+        g_stop.store(true, std::memory_order_relaxed);
         return TRUE;
     }
     return FALSE;
@@ -190,7 +196,7 @@ static int run_console(const char* settings_path)
     vc::agent::Options opts;
     if (settings_path) opts.settings_path = settings_path;
     opts.verbose = true;
-    return vc::agent::run(opts, [] { return g_stop; }) ? 0 : 1;
+    return vc::agent::run(opts, [] { return g_stop.load(std::memory_order_relaxed); }) ? 0 : 1;
 }
 
 int main(int argc, char** argv)

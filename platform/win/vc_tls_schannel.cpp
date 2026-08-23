@@ -121,10 +121,14 @@ namespace vc
             out_buf[0].cbBuffer = 0;
             SecBufferDesc out_desc{SECBUFFER_VERSION, 1, out_buf};
 
-            SECURITY_STATUS ss = InitializeSecurityContextA(
-                &cred, first ? nullptr : &ctx, first ? target.data() : nullptr, flags, 0, 0,
-                first ? nullptr : &in_desc, 0, first ? &ctx : nullptr, &out_desc, &out_flags,
-                nullptr);
+            /* The target name goes on every call, not just the first: with
+             * SCH_CRED_AUTO_CRED_VALIDATION the name is what the certificate is
+             * checked against, and the check happens on the call that completes
+             * the handshake. */
+            SECURITY_STATUS ss =
+                InitializeSecurityContextA(&cred, first ? nullptr : &ctx, target.data(), flags, 0,
+                                           0, first ? nullptr : &in_desc, 0, first ? &ctx : nullptr,
+                                           &out_desc, &out_flags, nullptr);
             first = false;
             if (!have_ctx && (ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED ||
                               ss == SEC_E_INCOMPLETE_MESSAGE || FAILED(ss)))

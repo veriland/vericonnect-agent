@@ -135,7 +135,10 @@ namespace vc
     {
         const Entry* e = find(section, key);
         if (!e || e->value.empty()) return def;
-        return std::atoi(e->value.c_str());
+        /* A malformed value yields the caller's default rather than 0, which
+         * would silently look like a deliberate setting. */
+        const auto v = parse_uint(e->value, 0x7FFFFFFF);
+        return v ? static_cast<int>(*v) : def;
     }
 
     bool Ini::get_bool(std::string_view section, std::string_view key, bool def) const

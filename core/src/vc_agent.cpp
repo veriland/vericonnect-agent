@@ -56,8 +56,6 @@ namespace vc::agent
             /* The command JSON is the request body (UTF-8). */
             std::string result = registry.dispatch(std::string(as_view(req.body)));
 
-            log::message(log::Level::Succ, "ADAPTER RESULT [{}]: {}", req.id, result);
-
             /* Map the adapter's StatusCode/StatusDescription onto the HTTP response. */
             int status = 200;
             std::string desc = "OK";
@@ -66,6 +64,14 @@ namespace vc::agent
                 status = static_cast<int>(root->get_num("StatusCode", 200));
                 desc = std::string(root->get_str("StatusDescription", "OK"));
             }
+
+            /* Status and size only: a result carries the command payload - for
+             * ReadFile the whole file, base64 encoded - which does not belong
+             * in a log file. The body itself is available at Trace. */
+            log::message(status >= 400 ? log::Level::Warn : log::Level::Succ,
+                         "ADAPTER RESULT [{}] {} {} ({} bytes)", req.id, status, desc,
+                         result.size());
+            log::message(log::Level::Trace, "ADAPTER RESULT BODY [{}]: {}", req.id, result);
             resp.status_code = status;
             resp.status_desc = desc;
             resp.content_type = "application/json";
