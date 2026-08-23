@@ -120,6 +120,24 @@ jobs:
           CXX: clang++-18
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
+      # Diagnostic: if this job fails again, the flags actually in play are
+      # the first thing to look at rather than something to guess about.
+      - name: Show the recorded compile flags
+        run: |
+          python3 - <<'PY'
+          import json
+          db = json.load(open('build/compile_commands.json'))
+          e = next(x for x in db if 'vc_common.cpp' in x['file'])
+          cmd = e.get('command') or ' '.join(e['arguments'])
+          print('compiler:', cmd.split()[0])
+          print('std flags:', [t for t in cmd.split() if 'std' in t])
+          PY
+          echo "--- __cplusplus as clang-18 sees it with the same flag ---"
+          echo '__cplusplus' | clang++-18 -std=gnu++23 -x c++ -E - | tail -1
+          echo "--- does <expected> yield std::expected? ---"
+          printf '#include <expected>\nstd::expected<int,int> e;\nint main(){}\n' > /tmp/x.cpp
+          clang++-18 -std=gnu++23 -fsyntax-only /tmp/x.cpp && echo "OK: std::expected available"
+
       - name: Run clang-tidy on the library
         run: |
           set -euo pipefail
@@ -127,7 +145,12 @@ jobs:
           # vc-selftest are glue where the checks report little of value.
           files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'platform/posix/*.cpp')
           echo "Analysing $(echo "$files" | wc -l) files"
-          clang-tidy-18 --quiet -p build $files
+          # -std is forced rather than left to the compilation database: the
+          # last -std on the command line wins, so this holds even if the
+          # recorded flag is lost or downgraded. Without C++23 the libstdc++
+          # <expected> header compiles to nothing and every vc::Result use
+          # becomes an error.
+          clang-tidy-18 --quiet -p build --extra-arg=-std=c++23 $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})
