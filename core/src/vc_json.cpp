@@ -9,8 +9,11 @@
 
 #include "vc/vc_json.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace vc
 {

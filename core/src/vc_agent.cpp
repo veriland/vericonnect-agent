@@ -22,6 +22,7 @@
 #include "vc/vc_fs.h"
 #include "vc/vc_json.h"
 
+#include <cctype>
 #include <optional>
 #include <span>
 #include <string>

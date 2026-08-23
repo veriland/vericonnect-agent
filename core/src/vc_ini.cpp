@@ -10,6 +10,9 @@
 #include "vc/vc_ini.h"
 #include "vc/vc_fs.h"
 
+#include <cctype>
+#include <cstdlib>
+
 namespace vc
 {
     namespace

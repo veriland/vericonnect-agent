@@ -9,6 +9,8 @@
 
 #include "vc/vc_common.h"
 
+#include <cstdlib>
+
 namespace vc
 {
     std::string_view error_str(Error e) noexcept

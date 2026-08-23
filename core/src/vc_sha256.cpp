@@ -2,6 +2,8 @@
  * vectors in apps/selftest. */
 #include "vc/vc_sha256.h"
 
+#include <cstring>
+
 namespace vc
 {
     namespace

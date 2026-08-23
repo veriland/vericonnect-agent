@@ -1,5 +1,8 @@
 #include "vc/vc_url.h"
 
+#include <cctype>
+#include <cstdlib>
+
 namespace vc
 {
     namespace

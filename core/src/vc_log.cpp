@@ -1,5 +1,6 @@
 #include "vc/vc_log.h"
 
+#include <cctype>
 #include <cstdio>
 #include <ctime>
 

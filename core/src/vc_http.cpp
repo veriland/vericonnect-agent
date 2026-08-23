@@ -12,6 +12,8 @@
 #include "vc/vc_tls.h"
 #include "vc/vc_os.h"
 
+#include <cctype>
+#include <cstdlib>
 #include <optional>
 
 namespace vc::http

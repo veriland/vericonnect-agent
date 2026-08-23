@@ -13,6 +13,8 @@
 #include "vc/vc_log.h"
 #include "vc/vc_impersonate.h"
 
+#include <cctype>
+
 namespace vc
 {
     namespace

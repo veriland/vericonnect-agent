@@ -3,6 +3,7 @@
 #include "vc/vc_base64.h"
 #include "vc/vc_url.h"
 
+#include <cctype>
 #include <ctime>
 
 namespace vc
