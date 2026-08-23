@@ -103,8 +103,7 @@ namespace vc
             std::string path = "/$hc/" + cfg_.hybrid_connection +
                                "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
 
-            Result<WebSocket> ws =
-                WebSocket::connect(cfg_.namespace_host, 443, path, "", kConnectTimeout);
+            Result<WebSocket> ws = ws_connect(cfg_.namespace_host, 443, path, "", kConnectTimeout);
             if (!ws) return std::unexpected(Error::Io);
             ctrl_ = std::move(*ws);
 
@@ -185,7 +184,7 @@ namespace vc
                     path += url_encode(token);
                 }
             }
-            Result<WebSocket> ws = WebSocket::connect(u->host, u->port, path, "", kConnectTimeout);
+            Result<WebSocket> ws = ws_connect(u->host, u->port, path, "", kConnectTimeout);
             if (!ws) return std::nullopt;
             return std::move(*ws);
         }

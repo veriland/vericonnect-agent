@@ -14,6 +14,7 @@ set(VC_CORE_SOURCES
     src/vc_ini.cpp
     src/vc_log.cpp
     src/vc_sas.cpp
+    src/vc_scripted_transport.cpp
     src/vc_ws.cpp
     src/vc_http.cpp
     src/vc_relay.cpp

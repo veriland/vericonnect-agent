@@ -8,15 +8,26 @@
  */
 
 /*
- * vc_ws.h - RFC 6455 WebSocket client over vc::Tls.
+ * vc_ws.h - RFC 6455 WebSocket client over any vc::Transport.
  * Messages are reassembled from fragments; ping/pong is handled internally
  * by recv().
+ *
+ * The class is templated on its transport so the framing can be driven from
+ * a scripted in-memory transport in tests (see vc_scripted_transport.h) with
+ * no network. WebSocket is the production instantiation over vc::Tls.
+ *
+ * Construction is deliberately split (DESIGN.md §8): upgrade() performs the
+ * HTTP/1.1 upgrade over a transport that is already connected, while
+ * ws_connect() is the convenience wrapper that dials a TCP socket, wraps it
+ * in TLS and then upgrades. Only the wrapper knows how to open a connection,
+ * so a test never has to.
  */
 #ifndef VC_WS_H
 #define VC_WS_H
 
 #include "vc_common.h"
 #include "vc_tls.h"
+#include "vc_transport.h"
 
 #ifdef __cplusplus
 
@@ -28,7 +39,7 @@
 
 namespace vc
 {
-    class WebSocket
+    template <Transport T> class WebSocketT
     {
     public:
         enum class MsgType
@@ -44,18 +55,20 @@ namespace vc
             Bytes payload;
         };
 
-        WebSocket() noexcept = default;
-        WebSocket(WebSocket&&) noexcept = default;
-        WebSocket& operator=(WebSocket&&) noexcept = default;
-        WebSocket(const WebSocket&) = delete;
-        WebSocket& operator=(const WebSocket&) = delete;
+        WebSocketT() noexcept = default;
+        WebSocketT(WebSocketT&&) noexcept = default;
+        WebSocketT& operator=(WebSocketT&&) noexcept = default;
+        WebSocketT(const WebSocketT&) = delete;
+        WebSocketT& operator=(const WebSocketT&) = delete;
 
-        /* Connect + upgrade. path_and_query e.g. "/$hc/name?sb-hc-action=listen".
-         * extra_headers: optional "Header: value\r\n" lines. */
-        [[nodiscard]] static Result<WebSocket> connect(const std::string& host, int port,
-                                                       const std::string& path_and_query,
-                                                       std::string_view extra_headers,
-                                                       int timeout_ms);
+        /* Perform the HTTP/1.1 upgrade over an already-connected transport.
+         * host fills the Host header; path_and_query e.g.
+         * "/$hc/name?sb-hc-action=listen"; extra_headers is optional
+         * "Header: value\r\n" lines. Takes ownership of the transport. */
+        [[nodiscard]] static Result<WebSocketT> upgrade(T transport, const std::string& host,
+                                                        const std::string& path_and_query,
+                                                        std::string_view extra_headers,
+                                                        int timeout_ms);
 
         /* Send one complete message (auto-fragments large payloads). */
         [[nodiscard]] Status send(MsgType type, std::span<const std::uint8_t> data);
@@ -72,20 +85,29 @@ namespace vc
         void close();
         bool valid() const noexcept
         {
-            return tls_.valid();
+            return transport_.valid();
         }
 
     private:
-        explicit WebSocket(Tls tls) noexcept : tls_(std::move(tls)) {}
+        explicit WebSocketT(T transport) noexcept : transport_(std::move(transport)) {}
 
         [[nodiscard]] Result<std::size_t> read_more(int timeout_ms);
         [[nodiscard]] Status send_frame(std::uint8_t opcode, bool fin,
                                         std::span<const std::uint8_t> data);
 
-        Tls tls_;
+        T transport_;
         Bytes in_; /* raw undecoded incoming bytes */
         bool closed_ = false;
     };
+
+    /* The production WebSocket: RFC 6455 over TLS. */
+    using WebSocket = WebSocketT<Tls>;
+
+    /* Dial host:port, wrap it in TLS and upgrade. The only entry point that
+     * opens a connection, which is what keeps WebSocketT itself testable. */
+    [[nodiscard]] Result<WebSocket> ws_connect(const std::string& host, int port,
+                                               const std::string& path_and_query,
+                                               std::string_view extra_headers, int timeout_ms);
 } // namespace vc
 
 #endif /* __cplusplus */

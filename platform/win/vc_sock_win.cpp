@@ -126,7 +126,7 @@ namespace vc
         return Socket(static_cast<std::intptr_t>(sock));
     }
 
-    Result<std::size_t> Socket::send(std::span<const std::uint8_t> data)
+    Status Socket::send(std::span<const std::uint8_t> data)
     {
         const char* p = reinterpret_cast<const char*>(data.data());
         std::size_t sent = 0;
@@ -137,7 +137,7 @@ namespace vc
             if (n == SOCKET_ERROR) return std::unexpected(Error::Io);
             sent += static_cast<std::size_t>(n);
         }
-        return sent;
+        return {};
     }
 
     Result<std::size_t> Socket::recv(std::span<std::uint8_t> buf, int timeout_ms)

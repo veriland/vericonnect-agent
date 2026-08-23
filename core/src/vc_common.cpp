@@ -8,6 +8,9 @@
  */
 
 #include "vc/vc_common.h"
+#include "vc/vc_transport.h"
+#include "vc/vc_tls.h"
+#include "vc/vc_sock.h"
 
 #include <cstdlib>
 
@@ -56,3 +59,12 @@ extern "C"
         std::free(p);
     }
 } // extern "C"
+
+namespace vc
+{
+    /* DESIGN.md §4: the two real transports must satisfy the Transport
+     * concept. Asserted here so a signature drift in either platform layer
+     * fails the build rather than only the templated protocol code. */
+    static_assert(Transport<Tls>, "vc::Tls must satisfy vc::Transport");
+    static_assert(Transport<Socket>, "vc::Socket must satisfy vc::Transport");
+} // namespace vc
