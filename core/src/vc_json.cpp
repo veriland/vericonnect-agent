@@ -416,14 +416,28 @@ namespace vc
             }
             else if (c == '-' || (c >= '0' && c <= '9'))
             {
-                char* endp = nullptr;
-                /* The buffer is NUL terminated, so strtod stops safely. */
-                double d = std::strtod(ps.p, &endp);
-                if (endp && endp != ps.p)
+                /* strtod needs a NUL terminator, so copy the number token into
+                 * a local buffer. Copying the whole document to get one, as
+                 * this used to, doubles peak memory for a large message. */
+                const char* q = ps.p;
+                if (q < ps.end && (*q == '-' || *q == '+')) q++;
+                while (q < ps.end && ((*q >= '0' && *q <= '9') || *q == '.' || *q == 'e' ||
+                                      *q == 'E' || *q == '+' || *q == '-'))
+                    q++;
+                const auto len = static_cast<std::size_t>(q - ps.p);
+                char buf[512];
+                if (len > 0 && len < sizeof buf)
                 {
-                    ps.p = endp;
-                    out = Json::number(d);
-                    ok = true;
+                    std::memcpy(buf, ps.p, len);
+                    buf[len] = '\0';
+                    char* endp = nullptr;
+                    const double d = std::strtod(buf, &endp);
+                    if (endp && endp != buf)
+                    {
+                        ps.p += static_cast<std::size_t>(endp - buf);
+                        out = Json::number(d);
+                        ok = true;
+                    }
                 }
             }
 
@@ -434,9 +448,9 @@ namespace vc
 
     Result<Json> Json::parse(std::string_view text)
     {
-        /* Copy so strtod and lookahead see a NUL-terminated buffer. */
-        std::string copy(text);
-        Parser ps{copy.data(), copy.data() + copy.size()};
+        /* No copy: every read is bounded by ps.end, and the number scan above
+         * NUL-terminates its own token. */
+        Parser ps{text.data(), text.data() + text.size()};
         Json v;
         if (!parse_value(ps, v)) return std::unexpected(Error::Protocol);
         ps.skip_ws();

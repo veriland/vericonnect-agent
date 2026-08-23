@@ -12,6 +12,9 @@
 #include <windows.h>
 #include <bcrypt.h>
 
+#include <string>
+#include <string_view>
+
 #pragma comment(lib, "bcrypt.lib")
 
 namespace vc::os
@@ -42,6 +45,30 @@ namespace vc::os
                          static_cast<int>(st.wDay),         static_cast<int>(st.wHour),
                          static_cast<int>(st.wMinute),      static_cast<int>(st.wSecond),
                          static_cast<int>(st.wMilliseconds)};
+    }
+
+    std::string last_error_text()
+    {
+        const DWORD e = GetLastError();
+        if (e == 0) return {};
+        char* msg = nullptr;
+        const DWORD n = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                                           FORMAT_MESSAGE_IGNORE_INSERTS,
+                                       nullptr, e, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                       reinterpret_cast<LPSTR>(&msg), 0, nullptr);
+        std::string text = std::to_string(e) + ": ";
+        if (n && msg)
+        {
+            /* FormatMessage appends CRLF. */
+            std::string_view sv(msg, n);
+            while (!sv.empty() && (sv.back() == '\r' || sv.back() == '\n'))
+                sv.remove_suffix(1);
+            text.append(sv);
+        }
+        else
+            text += "unknown";
+        if (msg) LocalFree(msg);
+        return text;
     }
 
     const char* shared_library_extension() noexcept

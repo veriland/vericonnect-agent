@@ -1268,6 +1268,54 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * JSON numbers. Json::parse no longer copies the document, so a number
+     * token ending exactly at the end of the buffer is the case to prove.
+     * ------------------------------------------------------------------- */
+
+    void test_json_numbers()
+    {
+        std::printf("JSON numbers\n");
+        auto num = [](std::string_view t) -> std::optional<double>
+        {
+            auto j = vc::Json::parse(t);
+            if (!j || !j->is_number()) return std::nullopt;
+            return j->as_number();
+        };
+        check("integer", num("123") == 123.0);
+        check("negative", num("-7") == -7.0);
+        check("fraction", num("1.5") == 1.5);
+        check("exponent", num("2e3") == 2000.0);
+        check("negative exponent", num("5e-1") == 0.5);
+        check("zero", num("0") == 0.0);
+
+        /* Numbers flush against the end of the buffer, with no NUL to lean on. */
+        {
+            auto j = vc::Json::parse("[1,2,3]");
+            check("array of numbers", j && j->size() == 3);
+        }
+        {
+            auto j = vc::Json::parse(R"({"a":42})");
+            check("number at object end", j && j->get_num("a", 0) == 42.0);
+        }
+        {
+            /* string_view over a buffer with no terminator at all. */
+            const char raw[] = {'9', '9', '9'};
+            auto j = vc::Json::parse(std::string_view(raw, sizeof raw));
+            check("unterminated buffer parsed", j && j->as_number() == 999.0);
+        }
+        /* Malformed input must fail, not read past the end. */
+        check("truncated object rejected", !vc::Json::parse(R"({"a":1)").has_value());
+        check("truncated array rejected", !vc::Json::parse("[1,").has_value());
+        check("lone minus rejected", !vc::Json::parse("-").has_value());
+        check("trailing junk rejected", !vc::Json::parse("1 2").has_value());
+        /* A pathologically long number is rejected rather than mis-parsed. */
+        {
+            const std::string huge = "1" + std::string(600, '0');
+            check("over-long number rejected", !vc::Json::parse(huge).has_value());
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1278,6 +1326,7 @@ int main()
     test_base64();
     test_base64_strict();
     test_json();
+    test_json_numbers();
     test_url();
     test_parse_uint();
     test_url_port();

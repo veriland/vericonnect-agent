@@ -24,7 +24,7 @@ namespace vc::http
     {
         /* Matches the WebSocket message cap: a response must not be able to
          * grow until the process runs out of memory. */
-        constexpr std::size_t kMaxResponseBytes = 64u * 1024 * 1024;
+        constexpr std::size_t kMaxResponseBytes = std::size_t{64} * 1024 * 1024;
 
         bool istarts_with(std::string_view s, std::string_view prefix) noexcept
         {

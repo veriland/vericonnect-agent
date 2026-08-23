@@ -24,6 +24,8 @@
  */
 #include "vc/vc_relay.h"
 #include "vc/vc_log.h"
+
+#include <ctime>
 #include "vc/vc_relay_testing.h"
 #include "vc/vc_ws.h"
 #include "vc/vc_sas.h"
@@ -43,6 +45,22 @@ namespace vc
         constexpr std::uint64_t kPingInterval = 30000;
         constexpr int kConnectTimeout = 20000;
         constexpr int kBodyTimeout = 30000;
+
+        /*
+         * Is the SAS token due for renewal? The monotonic deadline is the
+         * normal trigger, but the token's own expiry is wall-clock, so a clock
+         * step either way could otherwise leave it expiring before renewal
+         * fires or never renewing at all. Either condition triggers.
+         * Pure, so it is tested directly.
+         */
+        bool renewal_due(std::uint64_t now_mono, std::uint64_t mono_due, std::uint64_t now_wall,
+                         std::uint64_t expiry_wall, unsigned ttl_seconds) noexcept
+        {
+            if (now_mono >= mono_due) return true;
+            if (expiry_wall == 0) return false;
+            const std::uint64_t margin = ttl_seconds / 4;
+            return now_wall + margin >= expiry_wall;
+        }
 
         std::string_view as_view(std::span<const std::uint8_t> b)
         {
@@ -123,6 +141,10 @@ namespace vc
 
             std::string make_token()
             {
+                /* Mirrors the expiry sas_token stamps into the token, so
+                 * renewal can be judged against the same clock the service
+                 * validates on. */
+                token_expiry_wall_ = static_cast<std::uint64_t>(std::time(nullptr)) + ttl_;
                 return sas_token(cfg_.namespace_host, cfg_.hybrid_connection, cfg_.key_name,
                                  cfg_.key, ttl_);
             }
@@ -148,7 +170,8 @@ namespace vc
             Dialler dial_;
             std::optional<Ws> ctrl_;
             unsigned ttl_;
-            std::uint64_t token_renew_at_ = 0;
+            std::uint64_t token_renew_at_ = 0;    /* monotonic ms */
+            std::uint64_t token_expiry_wall_ = 0; /* unix seconds */
             std::uint64_t next_ping_at_ = 0;
         };
 
@@ -172,7 +195,10 @@ namespace vc
 
         template <class D> void Listener<D>::renew_token_if_due(Ws& ctrl)
         {
-            if (os::monotonic_ms() < token_renew_at_) return;
+            if (!renewal_due(os::monotonic_ms(), token_renew_at_,
+                             static_cast<std::uint64_t>(std::time(nullptr)), token_expiry_wall_,
+                             ttl_))
+                return;
             std::string token = make_token();
             if (token.empty()) return;
 

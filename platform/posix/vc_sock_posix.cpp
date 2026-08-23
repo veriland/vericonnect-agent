@@ -9,6 +9,8 @@
 
 /* POSIX TCP client socket (Linux/macOS). */
 #include "vc/vc_sock.h"
+#include "vc/vc_log.h"
+#include "vc/vc_os.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -106,7 +108,14 @@ namespace vc
             fd = -1;
         }
         freeaddrinfo(res);
-        if (fd < 0) return std::unexpected(Error::Io);
+        if (fd < 0)
+        {
+            /* Error::Io alone cannot distinguish refused from unreachable from
+             * timed out; the OS code can. */
+            log::message(log::Level::Error, "connect to {}:{} failed - {}", host, port,
+                         os::last_error_text());
+            return std::unexpected(Error::Io);
+        }
 
         int ka = 1;
         setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof ka);

@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
 
 namespace vc::os
 {
@@ -48,6 +49,14 @@ namespace vc::os
     /* Filename extension for a shared library on this platform, leading dot
      * included: ".dll", ".dylib" or ".so". */
     [[nodiscard]] const char* shared_library_extension() noexcept;
+
+    /*
+     * The last OS error on this thread as "code: text" (errno on POSIX,
+     * GetLastError on Windows). vc::Error says only that I/O failed; this says
+     * which I/O failure, which is the difference between a diagnosable field
+     * report and a guess.
+     */
+    [[nodiscard]] std::string last_error_text();
 } // namespace vc::os
 
 #endif /* __cplusplus */

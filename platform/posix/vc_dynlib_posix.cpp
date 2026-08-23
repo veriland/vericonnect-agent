@@ -8,6 +8,7 @@
  */
 
 #include "vc/vc_adapter.h"
+#include "vc/vc_log.h"
 
 #include <dlfcn.h>
 
@@ -37,7 +38,14 @@ namespace vc
     std::optional<DynLib> DynLib::open(const std::string& path)
     {
         void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!h) return std::nullopt;
+        if (!h)
+        {
+            /* dlerror() is the only account of why a load was refused - a
+             * missing dependency looks identical to a bad path otherwise. */
+            const char* why = dlerror();
+            log::message(log::Level::Warn, "dlopen({}) failed: {}", path, why ? why : "unknown");
+            return std::nullopt;
+        }
         return DynLib(h);
     }
 
