@@ -246,3 +246,57 @@ checks §1 and part of §2–§4 mechanically.
       tree as "platform independent C11".
 - [x] **`.clang-format` said `Standard: c++20`** on a C++23 tree. Now
       `Latest`; clang-format has no `c++23` enumerator.
+
+## 9. Open design questions
+
+Recorded so they are argued once, from the same facts, rather than
+re-litigated whenever someone new reads the code.
+
+### 9.1 Should a command outcome be an HTTP status?
+
+**The question.** When an adapter command fails for a reason outside the
+agent's control — a file is missing, a parameter is malformed, a
+destination is locked — should that surface as a non-2xx HTTP status on
+the relay response, or as HTTP 200 carrying the outcome in the payload?
+
+**The case for 200-with-payload.** HTTP status belongs to the transport
+and app layers. The listener did its job: it accepted the request,
+dispatched it and produced an answer. Nothing failed at the level HTTP
+describes. Reporting a command-level outcome as 5xx or 4xx conflates two
+layers, and makes "the agent is broken" indistinguishable from "the
+command could not be satisfied".
+
+**The case for the status code.** A non-2xx is the only signal that
+reaches the party who can act on it. The adapters have no logging of
+their own; the host logs the full adapter JSON (`ADAPTER RESULT` in
+`vc_agent.cpp`), but that lands in `VeriConnect.log` on a machine behind
+the customer's firewall, which nobody reads until something else has
+already gone wrong. A 2xx-only design also requires every consumer to
+parse the body to notice failure, where most integration frameworks
+handle a non-2xx automatically — retry, dead-letter, alert.
+
+**What the code already does.** This is not an open choice at the
+margins; it is the established contract. `vc_agent.cpp` assigns the
+adapter's `StatusCode` directly to `resp.status_code`, and the
+FileSystem adapter already returns 400 for bad parameters (eleven
+call sites), 404 for a missing file (five), 409 for a destination that
+exists without overwrite, and 500 for an internal failure. The README
+documents 403 for a failed logon and 501 for impersonation on an
+unsupported platform. Every one of those is a command-level outcome
+already expressed as an HTTP status.
+
+**Current decision: keep the mapping.** The operational argument wins
+while the adapters cannot report anything except through the response,
+and consistency with the existing contract matters more than layering
+purity applied to one command.
+
+**What changing it would cost.** Moving to 200-with-payload is a
+breaking change for every consumer of every code above, not a local
+edit — it cannot be done for one command without making the contract
+incoherent. If it is ever revisited, the honest split would be: HTTP
+status for what the *host* is responsible for (malformed request,
+authentication, unsupported platform, agent-internal failure) and 200
+with the outcome in the payload for a command that ran and produced a
+definite answer. That needs coordinating with the D365FO side, and a
+major version.
+
