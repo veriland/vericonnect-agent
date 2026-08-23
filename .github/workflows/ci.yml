@@ -105,19 +105,26 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build g++-13 clang-tidy libssl-dev
+          sudo apt-get install -y build-essential cmake ninja-build clang clang-tidy libssl-dev
 
+      # Configure with clang, NOT gcc. clang-tidy uses clang's frontend, so a
+      # compile_commands.json written for g++ makes it parse libstdc++
+      # internals it does not understand - which reports tens of thousands of
+      # warnings and hard errors from system headers rather than findings in
+      # our code.
       - name: Configure (export compile commands)
         env:
-          CC: gcc-13
-          CXX: g++-13
+          CC: clang
+          CXX: clang++
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Run clang-tidy on our sources
         run: |
           set -euo pipefail
           files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'apps/*.cpp' 'platform/posix/*.cpp')
-          clang-tidy -p build $files
+          # --quiet drops the per-file "N warnings generated" summaries, which
+          # count suppressed system-header warnings and obscure the real list.
+          clang-tidy --quiet -p build $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})
