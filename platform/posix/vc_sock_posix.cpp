@@ -109,7 +109,7 @@ namespace vc
         return Socket(static_cast<std::intptr_t>(fd));
     }
 
-    Result<std::size_t> Socket::send(std::span<const std::uint8_t> data)
+    Status Socket::send(std::span<const std::uint8_t> data)
     {
         const std::uint8_t* p = data.data();
         std::size_t sent = 0;
@@ -123,7 +123,7 @@ namespace vc
             }
             sent += static_cast<std::size_t>(n);
         }
-        return sent;
+        return {};
     }
 
     Result<std::size_t> Socket::recv(std::span<std::uint8_t> buf, int timeout_ms)

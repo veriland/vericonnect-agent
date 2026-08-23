@@ -13,6 +13,7 @@
  */
 #include <array>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -26,6 +27,11 @@
 #include "vc/vc_ini.h"
 #include "vc/vc_fs.h"
 #include "vc/vc_adapter.h"
+#include "vc/vc_ws.h"
+#include "vc/vc_scripted_transport.h"
+#include "vc/vc_http.h"
+#include "vc/vc_relay.h"
+#include "vc/vc_relay_testing.h"
 
 namespace
 {
@@ -272,6 +278,848 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * WebSocket framing, driven by a ScriptedWire instead of a network. None
+     * of this code had any coverage before the transport seam existed.
+     * ------------------------------------------------------------------- */
+
+    using WS = vc::WebSocketT<vc::ScriptedTransport>;
+    using WirePtr = std::shared_ptr<vc::ScriptedWire>;
+
+    /* Build a server->client frame. Server frames are never masked. */
+    std::vector<std::uint8_t> server_frame(std::uint8_t opcode, bool fin, std::string_view payload)
+    {
+        std::vector<std::uint8_t> f;
+        f.push_back(static_cast<std::uint8_t>((fin ? 0x80 : 0x00) | opcode));
+        const std::size_t n = payload.size();
+        if (n < 126)
+            f.push_back(static_cast<std::uint8_t>(n));
+        else if (n <= 0xFFFF)
+        {
+            f.push_back(126);
+            f.push_back(static_cast<std::uint8_t>(n >> 8));
+            f.push_back(static_cast<std::uint8_t>(n));
+        }
+        else
+        {
+            f.push_back(127);
+            for (int i = 7; i >= 0; i--)
+                f.push_back(static_cast<std::uint8_t>(static_cast<std::uint64_t>(n) >> (i * 8)));
+        }
+        f.insert(f.end(), payload.begin(), payload.end());
+        return f;
+    }
+
+    /* One client frame decoded off the wire. */
+    struct ClientFrame
+    {
+        std::uint8_t opcode = 0;
+        bool fin = false;
+        bool masked = false;
+        std::string payload;
+        std::size_t total = 0;
+    };
+
+    std::optional<ClientFrame> decode_client_frame(std::span<const std::uint8_t> b)
+    {
+        if (b.size() < 2) return std::nullopt;
+        ClientFrame f;
+        f.fin = (b[0] & 0x80) != 0;
+        f.opcode = b[0] & 0x0F;
+        f.masked = (b[1] & 0x80) != 0;
+        std::uint64_t len = b[1] & 0x7F;
+        std::size_t pos = 2;
+        if (len == 126)
+        {
+            if (b.size() < pos + 2) return std::nullopt;
+            len = (static_cast<std::uint64_t>(b[pos]) << 8) | b[pos + 1];
+            pos += 2;
+        }
+        else if (len == 127)
+        {
+            if (b.size() < pos + 8) return std::nullopt;
+            len = 0;
+            for (int i = 0; i < 8; i++)
+                len = (len << 8) | b[pos + i];
+            pos += 8;
+        }
+        std::uint8_t mask[4] = {0, 0, 0, 0};
+        if (f.masked)
+        {
+            if (b.size() < pos + 4) return std::nullopt;
+            for (int i = 0; i < 4; i++)
+                mask[i] = b[pos + i];
+            pos += 4;
+        }
+        if (b.size() < pos + len) return std::nullopt;
+        for (std::uint64_t i = 0; i < len; i++)
+            f.payload.push_back(static_cast<char>(b[pos + i] ^ mask[i & 3]));
+        f.total = pos + static_cast<std::size_t>(len);
+        return f;
+    }
+
+    /* A wire that has already answered the upgrade, with the handshake
+     * request cleared so outgoing() shows only what the test triggers. */
+    std::optional<WS> upgraded(const WirePtr& wire)
+    {
+        wire->push_incoming("HTTP/1.1 101 Switching Protocols\r\n"
+                            "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+        auto ws = WS::upgrade(vc::ScriptedTransport(wire), "example.test", "/path?x=1", "", 5000);
+        if (!ws) return std::nullopt;
+        wire->clear_outgoing();
+        return std::optional<WS>(std::move(*ws));
+    }
+
+    void test_ws_upgrade()
+    {
+        std::printf("WebSocket upgrade\n");
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+            auto ws = WS::upgrade(vc::ScriptedTransport(wire), "example.test", "/path?x=1",
+                                  "X-Extra: 1\r\n", 5000);
+            check("101 accepted", ws.has_value());
+
+            /* The handshake request must be a well formed upgrade. */
+            const std::string req(wire->outgoing_text());
+            check("request line", req.starts_with("GET /path?x=1 HTTP/1.1\r\n"));
+            check("Host header", req.find("Host: example.test\r\n") != std::string::npos);
+            check("Upgrade header", req.find("Upgrade: websocket\r\n") != std::string::npos);
+            check("Connection header", req.find("Connection: Upgrade\r\n") != std::string::npos);
+            check("version 13", req.find("Sec-WebSocket-Version: 13\r\n") != std::string::npos);
+            check("extra header passed through", req.find("X-Extra: 1\r\n") != std::string::npos);
+            check("request terminated", req.ends_with("\r\n\r\n"));
+
+            /* Sec-WebSocket-Key must be 16 random bytes, base64 -> 24 chars. */
+            const auto kp = req.find("Sec-WebSocket-Key: ");
+            check("key present", kp != std::string::npos);
+            if (kp != std::string::npos)
+            {
+                const auto eol = req.find("\r\n", kp);
+                const std::string key = req.substr(kp + 19, eol - (kp + 19));
+                check("key is 24 base64 chars", key.size() == 24 && key[23] == '=');
+                auto raw = vc::base64_decode(key);
+                check("key decodes to 16 bytes", raw && raw->size() == 16);
+            }
+        }
+        {
+            /* Two upgrades must not reuse the same nonce. */
+            std::string k[2];
+            for (int i = 0; i < 2; i++)
+            {
+                auto wire = std::make_shared<vc::ScriptedWire>();
+                wire->push_incoming("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+                auto ws = WS::upgrade(vc::ScriptedTransport(wire), "h", "/p", "", 5000);
+                const std::string req(wire->outgoing_text());
+                const auto kp = req.find("Sec-WebSocket-Key: ");
+                const auto eol = req.find("\r\n", kp);
+                k[i] = req.substr(kp + 19, eol - (kp + 19));
+            }
+            check("nonce differs per handshake", k[0] != k[1]);
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 400 Bad Request\r\n\r\n");
+            auto ws = WS::upgrade(vc::ScriptedTransport(wire), "h", "/p", "", 5000);
+            check("non-101 rejected", !ws.has_value() && ws.error() == vc::Error::Protocol);
+        }
+        {
+            /* Header block never completes and the peer closes: not a hang. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 101 Switching");
+            wire->set_eof();
+            auto ws = WS::upgrade(vc::ScriptedTransport(wire), "h", "/p", "", 5000);
+            check("truncated header rejected", !ws.has_value());
+        }
+        {
+            /* A transport that refuses the very first write. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->fail_next_send();
+            auto ws = WS::upgrade(vc::ScriptedTransport(wire), "h", "/p", "", 5000);
+            check("failed handshake write rejected",
+                  !ws.has_value() && ws.error() == vc::Error::Io);
+        }
+    }
+
+    void test_ws_recv()
+    {
+        std::printf("WebSocket recv\n");
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            check("upgraded", ws.has_value());
+            auto f = server_frame(0x1, true, "hello");
+            wire->push_incoming(std::span<const std::uint8_t>(f));
+            auto m = ws->recv(1000);
+            check("text frame received", m.has_value());
+            check("text type", m && m->type == WS::MsgType::Text);
+            check("text payload",
+                  m && std::string(m->payload.begin(), m->payload.end()) == "hello");
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto a = server_frame(0x1, false, "Hel");
+            auto b = server_frame(0x0, true, "lo!");
+            wire->push_incoming(std::span<const std::uint8_t>(a));
+            wire->push_incoming(std::span<const std::uint8_t>(b));
+            auto m = ws->recv(1000);
+            check("fragments reassembled",
+                  m && std::string(m->payload.begin(), m->payload.end()) == "Hello!");
+        }
+        {
+            /* A ping is answered with a pong carrying the same payload, and
+             * never surfaces to the caller. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto ping = server_frame(0x9, true, "pp");
+            auto txt = server_frame(0x1, true, "after");
+            wire->push_incoming(std::span<const std::uint8_t>(ping));
+            wire->push_incoming(std::span<const std::uint8_t>(txt));
+            auto m = ws->recv(1000);
+            check("ping hidden from caller",
+                  m && std::string(m->payload.begin(), m->payload.end()) == "after");
+            auto pong = decode_client_frame(wire->outgoing());
+            check("pong sent", pong && pong->opcode == 0xA);
+            check("pong echoes payload", pong && pong->payload == "pp");
+            check("pong is masked", pong && pong->masked);
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto cl = server_frame(0x8, true, "\x03\xe8");
+            wire->push_incoming(std::span<const std::uint8_t>(cl));
+            auto m = ws->recv(1000);
+            check("close surfaces as Close", m && m->type == WS::MsgType::Close);
+            auto echo = decode_client_frame(wire->outgoing());
+            check("close echoed", echo && echo->opcode == 0x8);
+            auto again = ws->recv(1000);
+            check("recv after close fails",
+                  !again.has_value() && again.error() == vc::Error::Closed);
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto bad = server_frame(0x0, true, "orphan");
+            wire->push_incoming(std::span<const std::uint8_t>(bad));
+            auto m = ws->recv(1000);
+            check("orphan continuation rejected",
+                  !m.has_value() && m.error() == vc::Error::Protocol);
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto m = ws->recv(0);
+            check("empty recv times out", !m.has_value() && m.error() == vc::Error::Timeout);
+        }
+        {
+            /* A frame split across two reads must still parse. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto f = server_frame(0x1, true, "split-me");
+            std::vector<std::uint8_t> head(f.begin(), f.begin() + 4);
+            std::vector<std::uint8_t> tail(f.begin() + 4, f.end());
+            wire->push_incoming(std::span<const std::uint8_t>(head));
+            auto partial = ws->recv(0);
+            check("incomplete frame does not yield a message", !partial.has_value());
+            wire->push_incoming(std::span<const std::uint8_t>(tail));
+            auto m = ws->recv(1000);
+            check("partial frame reassembled",
+                  m && std::string(m->payload.begin(), m->payload.end()) == "split-me");
+        }
+        {
+            /* 126..65535 uses the 16-bit length form. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            const std::string big(1000, 'x');
+            auto f = server_frame(0x2, true, big);
+            wire->push_incoming(std::span<const std::uint8_t>(f));
+            auto m = ws->recv(1000);
+            check("16-bit length frame parsed",
+                  m && m->payload.size() == 1000 && m->type == WS::MsgType::Binary);
+        }
+        {
+            /* An orderly close mid-message is an error, not a truncated
+             * message silently returned as success. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            auto a = server_frame(0x1, false, "Hel");
+            wire->push_incoming(std::span<const std::uint8_t>(a));
+            wire->set_eof();
+            auto m = ws->recv(1000);
+            check("eof mid-message is an error", !m.has_value());
+        }
+    }
+
+    void test_ws_send()
+    {
+        std::printf("WebSocket send\n");
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            check("send small ok", ws->send(WS::MsgType::Text, bytes("hi")).has_value());
+            auto f = decode_client_frame(wire->outgoing());
+            check("one frame written", f.has_value());
+            check("opcode text", f && f->opcode == 0x1);
+            check("fin set", f && f->fin);
+            check("client frame masked", f && f->masked);
+            check("payload round-trips", f && f->payload == "hi");
+            check("no trailing bytes", f && f->total == wire->outgoing().size());
+        }
+        {
+            /* Masking must actually vary: the same payload twice must not
+             * produce identical bytes on the wire. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            check("first send", ws->send(WS::MsgType::Text, bytes("same")).has_value());
+            const vc::Bytes one = wire->outgoing();
+            wire->clear_outgoing();
+            check("second send", ws->send(WS::MsgType::Text, bytes("same")).has_value());
+            const vc::Bytes two = wire->outgoing();
+            check("mask varies per frame", one != two);
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            check("ping ok", ws->send_ping().has_value());
+            auto f = decode_client_frame(wire->outgoing());
+            check("ping opcode", f && f->opcode == 0x9);
+            check("ping empty", f && f->payload.empty());
+        }
+        {
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            check("close ok", ws->send_close(1000).has_value());
+            auto f = decode_client_frame(wire->outgoing());
+            check("close opcode", f && f->opcode == 0x8);
+            check("close carries code 1000",
+                  f && f->payload.size() == 2 &&
+                      static_cast<unsigned char>(f->payload[0]) == 0x03 &&
+                      static_cast<unsigned char>(f->payload[1]) == 0xe8);
+        }
+        {
+            /* 126..65535 payload uses the 16-bit length form. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            const std::string mid(200, 'm');
+            check("mid send ok", ws->send(WS::MsgType::Binary, bytes(mid)).has_value());
+            const auto& out = wire->outgoing();
+            check("16-bit length used", out.size() > 1 && (out[1] & 0x7F) == 126);
+            auto f = decode_client_frame(out);
+            check("mid payload round-trips", f && f->payload == mid);
+        }
+        {
+            /* Over the fragment size the message is split, first frame
+             * carrying the opcode and only the last one FIN. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            const std::string huge(150 * 1024, 'z');
+            check("large send ok", ws->send(WS::MsgType::Binary, bytes(huge)).has_value());
+
+            std::span<const std::uint8_t> rest(wire->outgoing());
+            std::string rebuilt;
+            int frames = 0;
+            bool first = true, last_fin = false, opcodes_ok = true;
+            while (!rest.empty())
+            {
+                auto f = decode_client_frame(rest);
+                if (!f) break;
+                if (first && f->opcode != 0x2) opcodes_ok = false;
+                if (!first && f->opcode != 0x0) opcodes_ok = false;
+                if (!f->masked) opcodes_ok = false;
+                rebuilt += f->payload;
+                last_fin = f->fin;
+                rest = rest.subspan(f->total);
+                first = false;
+                frames++;
+            }
+            check("fragmented into several frames", frames > 1);
+            check("continuation opcodes correct", opcodes_ok);
+            check("only the last frame has FIN", last_fin);
+            check("fragments rebuild the payload", rebuilt == huge);
+        }
+        {
+            /* A transport write failure propagates instead of being lost. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            wire->fail_next_send();
+            auto rc = ws->send(WS::MsgType::Text, bytes("nope"));
+            check("send failure propagates", !rc.has_value() && rc.error() == vc::Error::Io);
+        }
+        {
+            /* After close(), sends are refused rather than silently dropped. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            auto ws = upgraded(wire);
+            ws->close();
+            check("valid() false after close", !ws->valid());
+            auto rc = ws->send(WS::MsgType::Text, bytes("x"));
+            check("send after close refused", !rc.has_value() && rc.error() == vc::Error::Closed);
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * HTTP response parsing, over a ScriptedWire. The chunked decoder and
+     * the status-line parser had no coverage before the transport seam.
+     * ------------------------------------------------------------------- */
+
+    vc::http::Request basic_request(std::string_view method = "GET")
+    {
+        vc::http::Request r;
+        r.method = method;
+        r.host = "api.example.test";
+        r.port = 443;
+        r.path_and_query = "/v1/thing?a=b";
+        r.timeout_ms = 1000;
+        return r;
+    }
+
+    void test_http()
+    {
+        std::printf("HTTP client\n");
+        {
+            /* Request shape. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("200 parsed", resp.has_value());
+            check("status code", resp && resp->status == 200);
+            check("status text", resp && resp->status_text == "OK");
+            check("body", resp && std::string(resp->body.begin(), resp->body.end()) == "hi");
+            const std::string sent(wire->outgoing_text());
+            check("request line", sent.starts_with("GET /v1/thing?a=b HTTP/1.1\r\n"));
+            check("host header", sent.find("Host: api.example.test\r\n") != std::string::npos);
+            check("connection close", sent.find("Connection: close\r\n") != std::string::npos);
+            check("no content-length without a body",
+                  sent.find("Content-Length:") == std::string::npos);
+        }
+        {
+            /* A body adds Content-Length and a default Content-Type. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request("POST");
+            const std::string payload = "{\"k\":1}";
+            r.body = bytes(payload);
+            auto resp = vc::http::exchange(t, r);
+            check("201 parsed", resp && resp->status == 201);
+            const std::string sent(wire->outgoing_text());
+            check("content-length set", sent.find("Content-Length: 7\r\n") != std::string::npos);
+            check("default content-type json",
+                  sent.find("Content-Type: application/json\r\n") != std::string::npos);
+            check("body written", sent.ends_with(payload));
+        }
+        {
+            /* An explicit content type is honoured, and extra headers pass. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request("POST");
+            r.body = bytes("x");
+            r.content_type = "text/plain";
+            r.extra_headers = "X-Trace: abc\r\n";
+            auto resp = vc::http::exchange(t, r);
+            check("explicit exchange ok", resp.has_value());
+            const std::string sent(wire->outgoing_text());
+            check("content-type honoured",
+                  sent.find("Content-Type: text/plain\r\n") != std::string::npos);
+            check("extra header passed", sent.find("X-Trace: abc\r\n") != std::string::npos);
+        }
+        {
+            /* Chunked transfer encoding is decoded. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\n"
+                                "Transfer-Encoding: chunked\r\n\r\n"
+                                "5\r\nHello\r\n"
+                                "2\r\n, \r\n"
+                                "6\r\nworld!\r\n"
+                                "0\r\n\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("chunked parsed", resp.has_value());
+            check("chunked body reassembled",
+                  resp && std::string(resp->body.begin(), resp->body.end()) == "Hello, world!");
+        }
+        {
+            /* Chunk sizes are hex, not decimal: 0x10 == 16 bytes. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            const std::string sixteen = "0123456789abcdef";
+            wire->push_incoming("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                "10\r\n" +
+                                sixteen + "\r\n0\r\n\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("hex chunk size honoured",
+                  resp && std::string(resp->body.begin(), resp->body.end()) == sixteen);
+        }
+        {
+            /* Response arriving in dribbles across several reads. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 404 Not ");
+            wire->push_incoming("Found\r\nContent-Length: 3\r\n");
+            wire->push_incoming("\r\nabc");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("split response parsed", resp && resp->status == 404);
+            check("split status text", resp && resp->status_text == "Not Found");
+            check("split body", resp && std::string(resp->body.begin(), resp->body.end()) == "abc");
+        }
+        {
+            /* Header block never terminates: a protocol error, not a hang. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("unterminated headers rejected",
+                  !resp.has_value() && resp.error() == vc::Error::Protocol);
+        }
+        {
+            /* Not HTTP at all. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("GARBAGE\r\n\r\nbody");
+            wire->set_eof();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("non-HTTP rejected", !resp.has_value() && resp.error() == vc::Error::Protocol);
+        }
+        {
+            /* A failed write surfaces instead of being mistaken for an empty
+             * response. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->fail_next_send();
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("write failure propagates", !resp.has_value() && resp.error() == vc::Error::Io);
+        }
+        {
+            /* Headers are exposed to the caller. */
+            auto wire = std::make_shared<vc::ScriptedWire>();
+            wire->push_incoming("HTTP/1.1 200 OK\r\nX-Thing: v\r\nContent-Length: 0\r\n\r\n");
+            vc::ScriptedTransport t(wire);
+            auto r = basic_request();
+            auto resp = vc::http::exchange(t, r);
+            check("headers exposed", resp && resp->headers.find("X-Thing: v") != std::string::npos);
+            check("headers exclude the blank line",
+                  resp && resp->headers.find("\r\n\r\n") == std::string::npos);
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * Relay listener state machine, over a ScriptedDialler. Previously
+     * untestable: the listener dials new connections mid-stream, so the
+     * dialler had to be injectable, not just the transport.
+     * ------------------------------------------------------------------- */
+
+    /* A server->client text frame carrying JSON. */
+    std::vector<std::uint8_t> text_frame(std::string_view json)
+    {
+        return server_frame(0x1, true, json);
+    }
+
+    vc::RelayConfig test_relay_cfg()
+    {
+        vc::RelayConfig c;
+        c.namespace_host = "ns.servicebus.windows.net";
+        c.hybrid_connection = "hc";
+        c.key_name = "policy";
+        c.key = "c2VjcmV0";
+        return c;
+    }
+
+    /* Collect every client frame written to a wire. */
+    std::vector<ClientFrame> written_frames(const vc::ScriptedWire& wire)
+    {
+        std::vector<ClientFrame> out;
+        std::span<const std::uint8_t> rest(wire.outgoing());
+        while (!rest.empty())
+        {
+            auto f = decode_client_frame(rest);
+            if (!f) break;
+            rest = rest.subspan(f->total);
+            out.push_back(*f);
+        }
+        return out;
+    }
+
+    /* Reassemble a binary message from its frames. A body over kFragSize is
+     * fragmented, so looking for one large frame would miss it. */
+    std::string binary_message(const vc::ScriptedWire& wire)
+    {
+        std::string out;
+        bool collecting = false;
+        for (const auto& f : written_frames(wire))
+        {
+            if (f.opcode == 0x2)
+            {
+                out.clear();
+                out += f.payload;
+                collecting = !f.fin;
+                if (f.fin) return out;
+            }
+            else if (f.opcode == 0x0 && collecting)
+            {
+                out += f.payload;
+                if (f.fin) return out;
+            }
+        }
+        return out;
+    }
+
+    /* Text frames only, as strings - the JSON the listener sent. */
+    std::vector<std::string> written_text(const vc::ScriptedWire& wire)
+    {
+        std::vector<std::string> out;
+        for (const auto& f : written_frames(wire))
+            if (f.opcode == 0x1) out.push_back(f.payload);
+        return out;
+    }
+
+    /*
+     * Driving the listener to completion needs care. run() calls stop()
+     * several times per pass, so counting calls means nothing; and the
+     * WebSocket reads in 8 KB chunks, so the wire can be drained while whole
+     * frames are still buffered inside the WebSocket. The reliable signal is
+     * the listener's own event stream: once the scripted wire reaches EOF the
+     * control channel is lost and DISCONNECTED is emitted, which is exactly
+     * when the test should stop.
+     */
+    struct RelayRun
+    {
+        std::vector<std::string> events;
+        bool finished = false;
+
+        vc::RelayCallbacks::event_fn recorder()
+        {
+            return [this](std::string_view e, int, std::string_view)
+            {
+                events.emplace_back(e);
+                if (e == "DISCONNECTED" || e == "CONNECT_FAILED") finished = true;
+            };
+        }
+        [[nodiscard]] bool saw(std::string_view name) const
+        {
+            for (const auto& e : events)
+                if (e == name) return true;
+            return false;
+        }
+    };
+
+    void test_relay()
+    {
+        std::printf("Relay listener\n");
+        {
+            /* Bad config is rejected before anything is dialled. */
+            vc::ScriptedDialler d;
+            vc::RelayConfig empty;
+            vc::RelayCallbacks cb;
+            auto rc = vc::relay_listen_with(empty, cb, d, [] { return true; });
+            check("empty config rejected", !rc.has_value() && rc.error() == vc::Error::InvalidArg);
+            check("nothing dialled for bad config", d.dials().empty());
+        }
+        {
+            /* The control channel is dialled at the namespace host on 443,
+             * with a listen action and a SAS token in the query. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("listen returns success on stop", rc.has_value());
+            check("one dial made", d.dials().size() == 1);
+            if (!d.dials().empty())
+            {
+                const auto& dial = d.dials()[0];
+                check("dialled the namespace host", dial.host == "ns.servicebus.windows.net");
+                check("dialled 443", dial.port == 443);
+                check("control path is $hc", dial.path_and_query.starts_with("/$hc/hc?"));
+                check("listen action",
+                      dial.path_and_query.find("sb-hc-action=listen") != std::string::npos);
+                check("token present",
+                      dial.path_and_query.find("sb-hc-token=") != std::string::npos);
+            }
+            check("connected event emitted", run.saw("CONNECTED"));
+        }
+        {
+            /* A request on the control channel reaches the callback and its
+             * response goes back over the same channel. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame(
+                R"({"request":{"id":"r1","method":"POST","requestTarget":"/api/x","body":false}})")));
+            ctrl->set_eof();
+
+            std::string seen_method, seen_target, seen_id;
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest& req, vc::RelayResponse& resp)
+            {
+                seen_method = std::string(req.method);
+                seen_target = std::string(req.target);
+                seen_id = std::string(req.id);
+                resp.status_code = 200;
+                resp.status_desc = "OK";
+                resp.body = vc::Bytes{'o', 'k'};
+                return true;
+            };
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("relay run ok", rc.has_value());
+            check("callback saw the method", seen_method == "POST");
+            check("callback saw the target", seen_target == "/api/x");
+            check("callback saw the id", seen_id == "r1");
+            check("response sent event", run.saw("RESPONSE_SENT"));
+
+            bool found_response = false;
+            for (const auto& t : written_text(*ctrl))
+                if (t.find("\"response\"") != std::string::npos &&
+                    t.find("\"r1\"") != std::string::npos && t.find("200") != std::string::npos)
+                    found_response = true;
+            check("response written to the control channel", found_response);
+
+            bool body_frame = false;
+            for (const auto& f : written_frames(*ctrl))
+                if (f.opcode == 0x2 && f.payload == "ok") body_frame = true;
+            check("body sent as a binary frame", body_frame);
+        }
+        {
+            /* No callback installed means 501, not silence. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame(
+                R"({"request":{"id":"r2","method":"GET","requestTarget":"/","body":false}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder(); /* on_request deliberately unset */
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            bool got501 = false;
+            for (const auto& t : written_text(*ctrl))
+                if (t.find("501") != std::string::npos) got501 = true;
+            check("missing handler answers 501", got501);
+        }
+        {
+            /* A large response is sent over a freshly dialled rendezvous
+             * connection, not squeezed down the control channel. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            auto rdv = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(
+                text_frame(R"({"request":{"id":"r3","method":"GET","requestTarget":"/big",)"
+                           R"("body":false,"address":"wss://rdv.example.test:443/path"}})")));
+            ctrl->set_eof();
+
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest&, vc::RelayResponse& resp)
+            {
+                resp.status_code = 200;
+                resp.body.assign(70 * 1024, 'B'); /* over the 60 KB control cap */
+                return true;
+            };
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("rendezvous dialled for a large body", d.dials().size() == 2);
+            if (d.dials().size() == 2)
+            {
+                check("rendezvous host from the address", d.dials()[1].host == "rdv.example.test");
+                check("rendezvous port from the address", d.dials()[1].port == 443);
+            }
+            /* 70 KB is over kFragSize, so it arrives as several frames. */
+            const std::string on_rdv = binary_message(*rdv);
+            check("large body went over the rendezvous", on_rdv.size() == 70 * 1024);
+            check("large body intact", on_rdv == std::string(70 * 1024, 'B'));
+            check("rendezvous body was fragmented", written_frames(*rdv).size() > 2);
+            check("large body did not go over the control channel", binary_message(*ctrl).empty());
+        }
+        {
+            /* A small response stays on the control channel even when an
+             * address is offered - the size cap is what decides. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(
+                text_frame(R"({"request":{"id":"r4","method":"GET","requestTarget":"/small",)"
+                           R"("body":false,"address":"wss://rdv.example.test:443/path"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            cb.on_request = [&](const vc::RelayRequest&, vc::RelayResponse& resp)
+            {
+                resp.status_code = 200;
+                resp.body = vc::Bytes{'s'};
+                return true;
+            };
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("small response makes no extra dial", d.dials().size() == 1);
+            check("small response still answered", run.saw("RESPONSE_SENT"));
+        }
+        {
+            /* An accept offer is reported and ignored, never answered. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(
+                std::span<const std::uint8_t>(text_frame(R"({"accept":{"address":"wss://x/y"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("accept offer ignored", run.saw("ACCEPT_IGNORED"));
+            check("accept made no extra dial", d.dials().size() == 1);
+        }
+        {
+            /* Unparsable control traffic is reported, not fatal. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(std::span<const std::uint8_t>(text_frame("{not json")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("bad control JSON reported", run.saw("PROTOCOL"));
+            check("bad control JSON is not fatal", rc.has_value());
+        }
+        {
+            /* A request with neither method nor address is rejected. */
+            vc::ScriptedDialler d;
+            auto ctrl = d.expect_dial();
+            ctrl->push_incoming(
+                std::span<const std::uint8_t>(text_frame(R"({"request":{"id":"r5"}})")));
+            ctrl->set_eof();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            (void)vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("method-less, address-less request rejected", run.saw("REQUEST_ERROR"));
+            check("no rendezvous attempted", d.dials().size() == 1);
+        }
+        {
+            /* A failed control dial is reported and does not spin. */
+            vc::ScriptedDialler d;
+            d.fail_next_dial();
+            RelayRun run;
+            vc::RelayCallbacks cb;
+            cb.on_event = run.recorder();
+            auto rc = vc::relay_listen_with(test_relay_cfg(), cb, d, [&] { return run.finished; });
+            check("failed dial reported", run.saw("CONNECT_FAILED"));
+            check("failed dial still returns success on stop", rc.has_value());
+            check("failed dial was attempted", d.dials().size() == 1);
+        }
+    }
+
 } // namespace
 
 int main()
@@ -284,6 +1132,11 @@ int main()
     test_url();
     test_ini();
     test_adapter_roundtrip();
+    test_ws_upgrade();
+    test_ws_recv();
+    test_ws_send();
+    test_http();
+    test_relay();
     std::printf("==========================\n");
     if (g_failed)
     {

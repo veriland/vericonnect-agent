@@ -8,17 +8,10 @@
  */
 
 #include "vc/vc_log.h"
+#include "vc/vc_os.h"
 
 #include <cctype>
 #include <cstdio>
-#include <ctime>
-
-#if defined(_WIN32)
-#include <windows.h>
-#include <sys/timeb.h>
-#else
-#include <sys/time.h>
-#endif
 
 namespace vc::log
 {
@@ -60,27 +53,14 @@ namespace vc::log
 
         std::string timestamp()
         {
-            std::time_t t = std::time(nullptr);
-            std::tm tmv;
-#if defined(_WIN32)
-            localtime_s(&tmv, &t);
-            struct _timeb tb;
-            _ftime_s(&tb);
-            int ms = tb.millitm;
-#else
-            localtime_r(&t, &tmv);
-            struct timeval tv;
-            gettimeofday(&tv, nullptr);
-            int ms = static_cast<int>(tv.tv_usec / 1000);
-#endif
+            const os::LocalTime t = os::local_time();
             char buf[40];
             if (g_cfg.time_precision)
-                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-                              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour,
-                              tmv.tm_min, tmv.tm_sec, ms);
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d.%03d", t.year,
+                              t.month, t.day, t.hour, t.minute, t.second, t.millisecond);
             else
-                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d", tmv.tm_year + 1900,
-                              tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+                std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d", t.year, t.month,
+                              t.day, t.hour, t.minute, t.second);
             return buf;
         }
 

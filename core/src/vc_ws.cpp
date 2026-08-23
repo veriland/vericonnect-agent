@@ -8,7 +8,7 @@
  */
 
 /*
- * RFC 6455 WebSocket client over vc::Tls.
+ * RFC 6455 WebSocket client over any vc::Transport.
  * - client frames are always masked
  * - fragmented messages are reassembled in recv
  * - ping is answered with pong transparently
@@ -17,6 +17,8 @@
 #include "vc/vc_ws.h"
 #include "vc/vc_base64.h"
 #include "vc/vc_os.h"
+#include "vc/vc_scripted_transport.h"
+#include "vc/vc_sock.h"
 
 #include <array>
 #include <cctype>
@@ -27,7 +29,7 @@ namespace vc
 {
     namespace
     {
-        constexpr std::size_t kFragSize = 60 * 1024;
+        constexpr std::size_t kFragSize = std::size_t{60} * 1024;
         constexpr std::uint64_t kMaxMsg = 64ull * 1024 * 1024; /* sanity cap 64 MB */
         constexpr int kHdrTimeout = 15000;
 
@@ -57,26 +59,22 @@ namespace vc
         };
     } // namespace
 
-    Result<std::size_t> WebSocket::read_more(int timeout_ms)
+    template <Transport T> Result<std::size_t> WebSocketT<T>::read_more(int timeout_ms)
     {
         std::uint8_t tmp[8192];
-        auto n = tls_.recv(std::span<std::uint8_t>(tmp, sizeof tmp), timeout_ms);
+        auto n = transport_.recv(std::span<std::uint8_t>(tmp, sizeof tmp), timeout_ms);
         if (!n) return std::unexpected(n.error());
         if (*n == 0) return std::unexpected(Error::Closed);
         in_.insert(in_.end(), tmp, tmp + *n);
         return *n;
     }
 
-    Result<WebSocket> WebSocket::connect(const std::string& host, int port,
-                                         const std::string& path_and_query,
-                                         std::string_view extra_headers, int timeout_ms)
+    template <Transport T>
+    Result<WebSocketT<T>> WebSocketT<T>::upgrade(T transport, const std::string& host,
+                                                 const std::string& path_and_query,
+                                                 std::string_view extra_headers, int timeout_ms)
     {
-        Result<Socket> sock = Socket::connect(host, port, timeout_ms);
-        if (!sock) return std::unexpected(sock.error());
-        Result<Tls> tls = Tls::connect(std::move(*sock), host, timeout_ms);
-        if (!tls) return std::unexpected(tls.error());
-
-        WebSocket ws(std::move(*tls));
+        WebSocketT ws(std::move(transport));
 
         /* Sec-WebSocket-Key: 16 random bytes, base64 */
         std::array<std::uint8_t, 16> nonce;
@@ -100,12 +98,16 @@ namespace vc
             .append(extra_headers)
             .append("\r\n");
 
-        if (!ws.tls_.send(std::span<const std::uint8_t>(
+        if (!ws.transport_.send(std::span<const std::uint8_t>(
                 reinterpret_cast<const std::uint8_t*>(req.data()), req.size())))
             return std::unexpected(Error::Io);
 
         /* read the 101 response header block */
-        std::uint64_t deadline = os::monotonic_ms() + kHdrTimeout;
+        /* Honour the caller's budget for the 101 response; kHdrTimeout is
+         * only the fallback when no timeout was given. */
+        const std::uint64_t hdr_budget =
+            timeout_ms > 0 ? static_cast<std::uint64_t>(timeout_ms) : kHdrTimeout;
+        std::uint64_t deadline = os::monotonic_ms() + hdr_budget;
         std::size_t hdr_end;
         while ((hdr_end = find(ws.in_, "\r\n\r\n")) == static_cast<std::size_t>(-1))
         {
@@ -123,7 +125,9 @@ namespace vc
         return ws;
     }
 
-    Status WebSocket::send_frame(std::uint8_t opcode, bool fin, std::span<const std::uint8_t> data)
+    template <Transport T>
+    Status WebSocketT<T>::send_frame(std::uint8_t opcode, bool fin,
+                                     std::span<const std::uint8_t> data)
     {
         std::uint8_t hdr[14];
         std::size_t h = 0;
@@ -150,7 +154,8 @@ namespace vc
         std::memcpy(hdr + h, mask, 4);
         h += 4;
 
-        if (!tls_.send(std::span<const std::uint8_t>(hdr, h))) return std::unexpected(Error::Io);
+        if (!transport_.send(std::span<const std::uint8_t>(hdr, h)))
+            return std::unexpected(Error::Io);
 
         if (len)
         {
@@ -162,7 +167,7 @@ namespace vc
                 if (n > sizeof chunk) n = sizeof chunk;
                 for (std::size_t i = 0; i < n; i++)
                     chunk[i] = data[off + i] ^ mask[(off + i) & 3];
-                if (!tls_.send(std::span<const std::uint8_t>(chunk, n)))
+                if (!transport_.send(std::span<const std::uint8_t>(chunk, n)))
                     return std::unexpected(Error::Io);
                 off += n;
             }
@@ -170,7 +175,8 @@ namespace vc
         return {};
     }
 
-    Status WebSocket::send(MsgType type, std::span<const std::uint8_t> data)
+    template <Transport T>
+    Status WebSocketT<T>::send(MsgType type, std::span<const std::uint8_t> data)
     {
         if (closed_) return std::unexpected(Error::Closed);
         std::uint8_t opcode = (type == MsgType::Text) ? 0x1 : 0x2;
@@ -192,13 +198,13 @@ namespace vc
         return {};
     }
 
-    Status WebSocket::send_ping()
+    template <Transport T> Status WebSocketT<T>::send_ping()
     {
         if (closed_) return std::unexpected(Error::Closed);
         return send_frame(0x9, true, {});
     }
 
-    Status WebSocket::send_close(std::uint16_t code)
+    template <Transport T> Status WebSocketT<T>::send_close(std::uint16_t code)
     {
         if (closed_) return std::unexpected(Error::Closed);
         std::uint8_t payload[2] = {static_cast<std::uint8_t>(code >> 8),
@@ -258,7 +264,8 @@ namespace vc
         }
     } // namespace
 
-    Result<WebSocket::Message> WebSocket::recv(int timeout_ms)
+    template <Transport T>
+    Result<typename WebSocketT<T>::Message> WebSocketT<T>::recv(int timeout_ms)
     {
         if (closed_) return std::unexpected(Error::Closed);
 
@@ -331,10 +338,28 @@ namespace vc
         }
     }
 
-    void WebSocket::close()
+    template <Transport T> void WebSocketT<T>::close()
     {
-        tls_.close();
+        transport_.close();
         in_.clear();
         closed_ = true;
+    }
+    /* ------------------------------------------------------------------
+     * Explicit instantiations. Keeping these here means the template
+     * definitions stay in this translation unit instead of moving into the
+     * public header, so core/ headers remain SDK-free (DESIGN.md §4).
+     * ---------------------------------------------------------------- */
+    template class WebSocketT<Tls>;
+    template class WebSocketT<ScriptedTransport>;
+
+    Result<WebSocket> ws_connect(const std::string& host, int port,
+                                 const std::string& path_and_query, std::string_view extra_headers,
+                                 int timeout_ms)
+    {
+        Result<Socket> sock = Socket::connect(host, port, timeout_ms);
+        if (!sock) return std::unexpected(sock.error());
+        Result<Tls> tls = Tls::connect(std::move(*sock), host, timeout_ms);
+        if (!tls) return std::unexpected(tls.error());
+        return WebSocket::upgrade(std::move(*tls), host, path_and_query, extra_headers, timeout_ms);
     }
 } // namespace vc

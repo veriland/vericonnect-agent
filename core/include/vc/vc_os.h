@@ -28,6 +28,26 @@ namespace vc::os
 
     /* Fill buf with cryptographically secure random bytes. */
     [[nodiscard]] Status random_bytes(std::span<std::uint8_t> buf);
+
+    /* Broken-down local wall-clock time, to millisecond precision. */
+    struct LocalTime
+    {
+        int year;        /* full year, e.g. 2026 */
+        int month;       /* 1-12                 */
+        int day;         /* 1-31                 */
+        int hour;        /* 0-23                 */
+        int minute;      /* 0-59                 */
+        int second;      /* 0-60 (leap second)   */
+        int millisecond; /* 0-999                */
+    };
+
+    /* Current local time. Exists so the localtime_r / localtime_s split stays
+     * in the platform layer instead of leaking into portable code. */
+    [[nodiscard]] LocalTime local_time() noexcept;
+
+    /* Filename extension for a shared library on this platform, leading dot
+     * included: ".dll", ".dylib" or ".so". */
+    [[nodiscard]] const char* shared_library_extension() noexcept;
 } // namespace vc::os
 
 #endif /* __cplusplus */

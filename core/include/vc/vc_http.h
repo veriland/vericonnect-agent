@@ -15,6 +15,7 @@
 #define VC_HTTP_H
 
 #include "vc_common.h"
+#include "vc_transport.h"
 
 #ifdef __cplusplus
 
@@ -45,7 +46,17 @@ namespace vc::http
         int timeout_ms = 30000;
     };
 
-    /* Perform a single HTTPS request. */
+    /*
+     * Run one request/response exchange over an already-connected transport,
+     * which is borrowed rather than owned. Split out from request() so the
+     * response parser - status line, headers, Content-Length and chunked
+     * bodies - can be tested without a network (DESIGN.md §8).
+     */
+    template <Transport T>
+    [[nodiscard]] Result<Response> exchange(T& transport, const Request& req);
+
+    /* Perform a single HTTPS request: dial, wrap in TLS, exchange. The only
+     * entry point here that opens a connection. */
     [[nodiscard]] Result<Response> request(const Request& req);
 } // namespace vc::http
 

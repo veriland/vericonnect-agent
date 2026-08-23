@@ -5,8 +5,9 @@ name: CI
 # the design rules in DESIGN.md. Merges into main are gated on this workflow
 # succeeding.
 #
-# There is a .clang-tidy in the repo root for local runs, but no clang-tidy
-# job: see DESIGN.md section 8 for why it is not wired up yet.
+# The clang-tidy job is clean and blocking. It analyses the library only -
+# core/, adapters/ and platform/posix/ - not apps/, which are hosting glue and
+# the test binary; see .clang-tidy and DESIGN.md section 7.
 
 on:
   pull_request:
@@ -95,6 +96,77 @@ jobs:
             echo "OK: every core/ header compiles standalone"
           fi
           exit $fail
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        # Two constraints, both learned the hard way:
+        #
+        # clang and clang-tidy must be the SAME major version, because
+        # clang-tidy uses clang's frontend.
+        #
+        # And libc++ is installed because clang-18 cannot provide
+        # std::expected against this image's libstdc++: the header is present
+        # but its feature guard evaluates false, so every vc::Result use
+        # becomes an error even with -std=gnu++23 and __cplusplus == 202302L.
+        # The build jobs use g++-13, which is unaffected; only this analysis
+        # job needs libc++.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libssl-dev \
+                                  clang-18 clang-tidy-18 libc++-18-dev libc++abi-18-dev
+
+      - name: Configure (export compile commands)
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      # Diagnostic: if this job fails again, the flags actually in play are
+      # the first thing to look at rather than something to guess about.
+      - name: Show the recorded compile flags
+        run: |
+          python3 - <<'PY'
+          import json
+          db = json.load(open('build/compile_commands.json'))
+          e = next(x for x in db if 'vc_common.cpp' in x['file'])
+          cmd = e.get('command') or ' '.join(e['arguments'])
+          print('compiler:', cmd.split()[0])
+          print('std flags:', [t for t in cmd.split() if 'std' in t])
+          PY
+          echo "--- __cplusplus as clang-18 sees it with the same flag ---"
+          echo '__cplusplus' | clang++-18 -std=gnu++23 -x c++ -E - | tail -1
+          echo "--- does <expected> yield std::expected? ---"
+          printf '#include <expected>\nstd::expected<int,int> e;\nint main(){}\n' > /tmp/x.cpp
+          if clang++-18 -std=gnu++23 -stdlib=libc++ -fsyntax-only /tmp/x.cpp; then
+            echo "OK: std::expected available under libc++"
+          else
+            echo "std::expected NOT available under libc++ either"
+          fi
+          # Never fail the run here; the point is evidence for the step below.
+          exit 0
+
+      - name: Run clang-tidy on the library
+        run: |
+          set -euo pipefail
+          # apps/ is excluded: agent-win is Windows-only, and the hosts and
+          # vc-selftest are glue where the checks report little of value.
+          files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'platform/posix/*.cpp')
+          echo "Analysing $(echo "$files" | wc -l) files"
+          # -std is forced rather than left to the compilation database: the
+          # last -std on the command line wins, so this holds even if the
+          # recorded flag is lost or downgraded. Without C++23 the libstdc++
+          # <expected> header compiles to nothing and every vc::Result use
+          # becomes an error.
+          # -stdlib=libc++ for the reason in the install step. -std is forced
+          # too: the last -std on the command line wins, so this holds even if
+          # the recorded flag is ever lost or downgraded.
+          clang-tidy-18 --quiet -p build \
+            --extra-arg=-std=c++23 --extra-arg=-stdlib=libc++ $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})

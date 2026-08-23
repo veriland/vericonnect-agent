@@ -43,8 +43,9 @@ namespace vc
         [[nodiscard]] static Result<Socket> connect(const std::string& host, int port,
                                                     int timeout_ms);
 
-        /* Send all bytes; returns the count sent or an error. */
-        [[nodiscard]] Result<std::size_t> send(std::span<const std::uint8_t> data);
+        /* Send all bytes, or fail. Returns no count: the call loops until the
+         * whole span is written, so the only useful answer is success. */
+        [[nodiscard]] Status send(std::span<const std::uint8_t> data);
 
         /* Returns bytes read (>0), 0 on orderly close, or an error
          * (Error::Timeout if nothing arrived within timeout_ms). */

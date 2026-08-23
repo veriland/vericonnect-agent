@@ -10,6 +10,7 @@
 #include "vc/vc_os.h"
 
 #include <ctime>
+#include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -46,5 +47,30 @@ namespace vc::os
         }
         close(fd);
         return {};
+    }
+
+    LocalTime local_time() noexcept
+    {
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        std::time_t t = tv.tv_sec;
+        std::tm tmv{};
+        localtime_r(&t, &tmv);
+        return LocalTime{tmv.tm_year + 1900,
+                         tmv.tm_mon + 1,
+                         tmv.tm_mday,
+                         tmv.tm_hour,
+                         tmv.tm_min,
+                         tmv.tm_sec,
+                         static_cast<int>(tv.tv_usec / 1000)};
+    }
+
+    const char* shared_library_extension() noexcept
+    {
+#if defined(__APPLE__)
+        return ".dylib";
+#else
+        return ".so";
+#endif
     }
 } // namespace vc::os

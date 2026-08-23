@@ -61,10 +61,14 @@ namespace vc
 
     struct RelayCallbacks
     {
+        using request_fn = std::function<bool(const RelayRequest& req, RelayResponse& resp)>;
+        using event_fn =
+            std::function<void(std::string_view event, int code, std::string_view desc)>;
+
         /* Fill resp; return true if resp is valid. */
-        std::function<bool(const RelayRequest& req, RelayResponse& resp)> on_request;
+        request_fn on_request;
         /* Informational events (connected, disconnected, renew, errors). */
-        std::function<void(std::string_view event, int code, std::string_view desc)> on_event;
+        event_fn on_event;
     };
 
     /*
@@ -73,6 +77,17 @@ namespace vc
      */
     [[nodiscard]] Status relay_listen(const RelayConfig& cfg, const RelayCallbacks& cb,
                                       const std::function<bool()>& stop_requested);
+
+    /*
+     * As relay_listen, but with the dialler injected. The listener opens new
+     * connections mid-stream for large responses, so the dialler - not just a
+     * transport - is what a test has to substitute. See vc_relay_testing.h for
+     * ScriptedDialler; production code wants relay_listen above.
+     */
+    template <class Dialler>
+    [[nodiscard]] Status relay_listen_with(const RelayConfig& cfg, const RelayCallbacks& cb,
+                                           Dialler dialler,
+                                           const std::function<bool()>& stop_requested);
 } // namespace vc
 
 #endif /* __cplusplus */

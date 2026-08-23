@@ -16,6 +16,9 @@ Checks: >
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
+  -bugprone-branch-clone,
+  -bugprone-exception-escape,
+  -bugprone-unused-return-value,
   cppcoreguidelines-special-member-functions,
   cppcoreguidelines-slicing,
   cppcoreguidelines-virtual-class-destructor,
@@ -27,6 +30,19 @@ Checks: >
   performance-*,
   readability-const-return-type,
   readability-redundant-string-cstr,
+
+# Three bugprone checks are off for reasons specific to this tree, not
+# because they are disliked:
+#
+#   branch-clone      - the duplicated arms are deliberate: an unknown URL
+#                       scheme defaults to the TLS port, and log::Level::Succ
+#                       is defined to log at Info.
+#   exception-escape   - the code does not throw, but std containers can, so
+#                       this fires on main() and on any function touching a
+#                       container. Nothing actionable follows.
+#   unused-return-value - [[nodiscard]] plus -Wunused-result already enforces
+#                       this properly, and honours the explicit (void) casts
+#                       that mark a deliberate discard. This check does not.
 
 # Empty: nothing is promoted to an error yet.
 WarningsAsErrors: ''

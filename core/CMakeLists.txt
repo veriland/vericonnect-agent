@@ -1,7 +1,8 @@
 # vc_core - portable core library.
-# Everything under core/src is platform independent C11.
+# Everything under core/src is platform independent C++23.
 # Platform specific implementations (sockets, TLS, dynamic library
-# loading, filesystem) live under platform/ and are selected here.
+# loading, filesystem, clock) live under platform/ and are selected here,
+# so vc_core spans both directories: see DESIGN.md section 1.
 
 set(VC_CORE_SOURCES
     src/vc_common.cpp
@@ -13,6 +14,7 @@ set(VC_CORE_SOURCES
     src/vc_ini.cpp
     src/vc_log.cpp
     src/vc_sas.cpp
+    src/vc_scripted_transport.cpp
     src/vc_ws.cpp
     src/vc_http.cpp
     src/vc_relay.cpp

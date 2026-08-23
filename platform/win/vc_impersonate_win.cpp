@@ -34,6 +34,16 @@ namespace vc
         {
             if (active) RevertToSelf();
         }
+
+        Impl() = default;
+
+        /* Reverts the thread token in its destructor, so a copy would revert
+         * twice - once for an identity it never established. It only ever
+         * lives in a unique_ptr (DESIGN.md §2). */
+        Impl(const Impl&) = delete;
+        Impl& operator=(const Impl&) = delete;
+        Impl(Impl&&) = delete;
+        Impl& operator=(Impl&&) = delete;
     };
 
     Impersonation::Impersonation() noexcept = default;

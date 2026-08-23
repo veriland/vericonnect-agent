@@ -11,6 +11,7 @@
 #include "vc/vc_fs.h"
 #include "vc/vc_json.h"
 #include "vc/vc_log.h"
+#include "vc/vc_os.h"
 #include "vc/vc_impersonate.h"
 
 #include <cctype>
@@ -19,14 +20,6 @@ namespace vc
 {
     namespace
     {
-#if defined(_WIN32)
-        constexpr const char* kAdapterExt = ".dll";
-#elif defined(__APPLE__)
-        constexpr const char* kAdapterExt = ".dylib";
-#else
-        constexpr const char* kAdapterExt = ".so";
-#endif
-
         bool iends_with(std::string_view s, std::string_view suffix) noexcept
         {
             if (s.size() < suffix.size()) return false;
@@ -102,7 +95,7 @@ namespace vc
 
         for (const std::string& n : *names)
         {
-            if (!iends_with(n, kAdapterExt)) continue;
+            if (!iends_with(n, os::shared_library_extension())) continue;
             std::optional<Adapter> ad = Adapter::load(fs::join(dir, n));
             if (ad)
             {
