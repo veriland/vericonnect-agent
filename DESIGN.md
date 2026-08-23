@@ -47,10 +47,21 @@ Two consequences are worth stating explicitly, because they are easy to
 break by accident:
 
 **`core/` never includes anything from `platform/`, `adapters/` or
-`apps/`.** It compiles standalone, on any OS, with no `#ifdef _WIN32`
-outside a header guard. This is the rule the README already calls the
-portability rule; it is a physical-design rule, and it is the one most
-worth defending in review.
+`apps/`.** This is the rule the README calls the portability rule; it is
+a physical-design rule, and the one most worth defending in review. It
+holds today and CI enforces it.
+
+The stronger form — no `#ifdef _WIN32` anywhere in `core/` — does *not*
+hold yet. Three exist. One is legitimate and permanent: the
+`__declspec(dllexport)` / `visibility` selection in `vc_adapter.h`,
+which is an ABI export macro with nowhere else to live. The other two
+are leaks, listed in §8.
+
+Note also that `core/CMakeLists.txt` compiles the matching `platform/`
+sources into the `vc_core` target, so "core" as a *build artefact* spans
+both directories. The separation is real at the source and header level,
+which is where it matters for portability review, but `vc_core` is not
+an independently linkable portable library.
 
 **The dependency is inverted at the interface, not at the call.** `core/`
 declares `vc::Socket`, `vc::Tls`, `vc::fs`, `vc::os` and
@@ -205,8 +216,12 @@ closely. The open items, roughly in order of value:
       Note the relay needs more than a transport: `rendezvous_connect`
       opens *new* connections mid-stream, so it also needs the dialler
       injected, as a second concept or a callable.
-- [ ] **`[[nodiscard]]` on the ~37 fallible declarations** in
-      `core/include/vc/`, then fix whatever the compiler surfaces.
+- [x] **`[[nodiscard]]` on the 37 fallible declarations** in
+      `core/include/vc/`. Sixteen of the seventeen discards it found
+      were best-effort and are now explicit `(void)` casts; the
+      seventeenth was a real bug in the filesystem adapter's `ReadFile`,
+      whose unchecked archive move could report 200 while leaving the
+      file in the polled folder to be read again.
 - [ ] **Single responsibility in `handle_request`.** `relay_listen` is
       a thin wrapper over a `Listener` class that is already decomposed
       into nine short methods — `ctrl_connect`, `renew_token_if_due`,
@@ -216,10 +231,25 @@ closely. The open items, roughly in order of value:
       reading and dispatch, and `run` at 55. Splitting the decision
       from the I/O in `handle_request` is what makes it testable once
       the transport seam exists.
-- [ ] **Enforce the layering rule in CI** — a grep for `platform/`,
-      `adapters/` and `apps/` includes inside `core/`, plus a
-      standalone-compile check of each `core/` header.
-- [ ] **`clang-tidy` with a `cppcoreguidelines-*` subset**, warnings
-      only at first, so §7 covers §2–§4 mechanically.
-- [ ] **`.clang-format` says `Standard: c++20`** while the project is
-      C++23.
+- [x] **Enforce the layering rule in CI** — the `design-rules` job
+      greps for `platform/`, `adapters/` and `apps/` includes inside
+      `core/` and compiles each of the 19 `core/` headers on its own
+      against nothing but the standard library.
+- [x] **`clang-tidy` with a focused check set**, non-blocking at
+      first, so §7 covers part of §2–§4 mechanically. Broad
+      `cppcoreguidelines-*` is deliberately not enabled: the pointer
+      arithmetic in the framing and codec paths and the
+      `reinterpret_cast` byte views are intrinsic to the design, so
+      those checks are noise rather than signal here.
+- [ ] **Two `#ifdef _WIN32` leaks in `core/`** (§1). `vc_log.cpp`
+      selects `localtime_s`/`_ftime_s` against
+      `localtime_r`/`gettimeofday` and pulls in `<windows.h>` to do it;
+      `vc_adapter.cpp` picks the `.dll`/`.dylib`/`.so` suffix. The first
+      is the real one — it puts an SDK include in the portable layer,
+      and belongs behind a `vc::os` clock helper implemented per
+      platform. The second is only a compile-time constant, and is
+      arguably not worth moving.
+- [ ] **`core/CMakeLists.txt`'s header comment is stale** — it says
+      "platform independent C11" for a C++23 tree.
+- [x] **`.clang-format` said `Standard: c++20`** on a C++23 tree. Now
+      `Latest`; clang-format has no `c++23` enumerator.

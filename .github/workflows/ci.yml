@@ -1,8 +1,9 @@
 name: CI
 
 # Runs on every pull request targeting main. Builds the project on Windows
-# and Linux, runs the core self-test, and enforces clang-format style.
-# Merges into main are gated on this workflow succeeding.
+# and Linux, runs the core self-test, enforces clang-format style and checks
+# the design rules in DESIGN.md. Merges into main are gated on this workflow
+# succeeding - except the clang-tidy job, which reports without blocking.
 
 on:
   pull_request:
@@ -47,6 +48,76 @@ jobs:
             echo "repo style with:  git ls-files '*.cpp' '*.h' '*.hpp' | xargs clang-format -i"
             exit 1
           fi
+
+  design-rules:
+    name: design rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 13
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13
+
+      # DESIGN.md section 1: core/ is the portable layer. It must not reach
+      # into the per-OS layer, the plugin layer or the hosting layer.
+      - name: core/ does not depend on platform/, adapters/ or apps/
+        run: |
+          set -euo pipefail
+          # Only source and headers - core/CMakeLists.txt deliberately
+          # compiles the matching platform/ sources into the vc_core target.
+          files=$(git ls-files 'core/*.h' 'core/*.cpp')
+          if grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*["<](\.\./)*(platform|adapters|apps)/' $files; then
+            echo "::error::core/ must not include from platform/, adapters/ or apps/ (DESIGN.md section 1)"
+            exit 1
+          fi
+          echo "OK: core/ includes nothing from platform/, adapters/ or apps/"
+
+      # DESIGN.md section 1 (insulation): a core/ header must compile on its
+      # own against nothing but the standard library - no platform SDK, and no
+      # reliance on being included after something else.
+      - name: core/ headers compile standalone
+        run: |
+          set -euo pipefail
+          fail=0
+          for h in core/include/vc/*.h; do
+            if ! g++-13 -std=c++23 -Icore/include -fsyntax-only -x c++ "$h" 2>/tmp/hdr.err; then
+              echo "::error file=$h::header does not compile standalone (DESIGN.md section 1)"
+              cat /tmp/hdr.err
+              fail=1
+            fi
+          done
+          if [ "$fail" -eq 0 ]; then
+            echo "OK: every core/ header compiles standalone"
+          fi
+          exit $fail
+
+  clang-tidy:
+    name: clang-tidy (non-blocking)
+    runs-on: ubuntu-latest
+    # Advisory for now: the check set in .clang-tidy is being worked down, so
+    # findings are reported but do not fail the PR. Remove once it is clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build g++-13 clang-tidy libssl-dev
+
+      - name: Configure (export compile commands)
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy on our sources
+        run: |
+          set -euo pipefail
+          files=$(git ls-files 'core/*.cpp' 'adapters/*.cpp' 'apps/*.cpp' 'platform/posix/*.cpp')
+          clang-tidy -p build $files
 
   build-test:
     name: build & self-test (${{ matrix.os }})
