@@ -58,6 +58,11 @@ the same `vc_agent_run()`; only process hosting differs. The
 `platform/posix/` layer is OpenSSL based (see the macOS build notes
 below) and not yet CI-tested.
 
+The design rules behind this layout — physical layering, RAII
+ownership, `Result`/`Status` error handling and how SOLID maps onto a
+codebase with almost no inheritance — are written up in
+[DESIGN.md](DESIGN.md).
+
 ## Building (Windows)
 
 Requires an MSVC toolchain with C++23 support and CMake ≥ 3.20. You do
@@ -224,7 +229,8 @@ For commercial licensing outside these terms, contact legal@veriland.co.uk.
 
 ## Contributing
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) —
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md)
+and [DESIGN.md](DESIGN.md) —
 all commits must be signed off under the [Developer Certificate of Origin](DCO)
 (`git commit -s`). To report a security issue privately, see
 [SECURITY.md](SECURITY.md).

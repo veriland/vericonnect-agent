@@ -45,7 +45,8 @@ git push --force-with-lease
    approach before you invest time.
 2. Fork the repo and create a topic branch off `main`.
 3. Make your change. Match the surrounding code style (C++23, existing naming
-   like `vc_*`, no new external dependencies without discussion).
+   like `vc_*`, no new external dependencies without discussion) and the
+   design rules in [DESIGN.md](DESIGN.md).
 4. Ensure it builds on the platforms you can test (see [README](README.md)).
 5. Open a pull request. Fill in the template, sign off your commits, and link
    the issue.
@@ -53,6 +54,10 @@ git push --force-with-lease
 ## What we look for
 
 - Small, focused PRs over large ones.
+- Conformance to [DESIGN.md](DESIGN.md) — in particular the layering rule
+  (`core/` stays portable and includes nothing from `platform/`,
+  `adapters/` or `apps/`), RAII ownership, and `Result`/`Status` for
+  anything fallible.
 - No secrets, credentials, or customer data in code, tests, or history.
 - Security-relevant changes (impersonation, TLS, SAS tokens, relay) get extra
   scrutiny — explain the security reasoning in the PR description.
