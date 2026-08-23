@@ -115,6 +115,18 @@ namespace
         check("decode invalid", !vc::base64_decode("!!!"));
     }
 
+    void test_base64_strict()
+    {
+        std::printf("base64 strictness\n");
+        check("truncated single char rejected", !vc::base64_decode("A").has_value());
+        check("valid round trip", vc::base64_decode("aGk=").has_value());
+        check("two chars decode to one byte",
+              vc::base64_decode("aGk=") && vc::base64_decode("aGk=")->size() == 2);
+        check("data after padding rejected", !vc::base64_decode("aGk=a").has_value());
+        check("bad alphabet rejected", !vc::base64_decode("aG!k").has_value());
+        check("empty is valid", vc::base64_decode("") && vc::base64_decode("")->empty());
+    }
+
     void test_json()
     {
         std::printf("JSON\n");
@@ -1204,6 +1216,58 @@ namespace
         }
     }
 
+    /* ---------------------------------------------------------------------
+     * Bounded numeric parsing, used for anything arriving off the machine.
+     * ------------------------------------------------------------------- */
+
+    void test_parse_uint()
+    {
+        std::printf("parse_uint\n");
+        check("plain decimal", vc::parse_uint("42", 100) == 42u);
+        check("at the limit", vc::parse_uint("100", 100) == 100u);
+        check("over the limit rejected", !vc::parse_uint("101", 100).has_value());
+        check("empty rejected", !vc::parse_uint("", 100).has_value());
+        check("negative rejected", !vc::parse_uint("-1", 100).has_value());
+        check("plus rejected", !vc::parse_uint("+1", 100).has_value());
+        check("trailing junk rejected", !vc::parse_uint("12abc", 100).has_value());
+        check("leading space rejected", !vc::parse_uint(" 12", 100).has_value());
+        check("not a number rejected", !vc::parse_uint("abc", 100).has_value());
+        check("overflow rejected",
+              !vc::parse_uint("99999999999999999999999", 0xFFFFFFFFull).has_value());
+        check("hex base", vc::parse_uint("10", 100, 16) == 16u);
+        check("hex rejects decimal-only digits", !vc::parse_uint("1g", 100, 16).has_value());
+        check("zero accepted", vc::parse_uint("0", 100) == 0u);
+    }
+
+    void test_url_port()
+    {
+        std::printf("URL port validation\n");
+        {
+            auto u = vc::url_parse("wss://h.example:8443/p");
+            check("valid port parsed", u && u->port == 8443);
+        }
+        {
+            auto u = vc::url_parse("wss://h.example/p");
+            check("default port for wss", u && u->port == 443);
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:0/p");
+            check("port 0 rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:99999/p");
+            check("out-of-range port rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:-5/p");
+            check("negative port rejected", !u.has_value());
+        }
+        {
+            auto u = vc::url_parse("wss://h.example:80x/p");
+            check("junk port rejected", !u.has_value());
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1212,8 +1276,11 @@ int main()
     test_sha256();
     test_hmac();
     test_base64();
+    test_base64_strict();
     test_json();
     test_url();
+    test_parse_uint();
+    test_url_port();
     test_ini();
     test_adapter_roundtrip();
     test_ws_upgrade();

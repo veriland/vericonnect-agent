@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -82,11 +83,14 @@ namespace vc
             }
             if (errno == EINPROGRESS)
             {
-                fd_set w;
-                FD_ZERO(&w);
-                FD_SET(fd, &w);
-                struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-                if (select(fd + 1, nullptr, &w, nullptr, &tv) > 0)
+                /* poll, not select: select indexes a fixed-size bitmap, so a
+                 * descriptor at or above FD_SETSIZE writes out of bounds. */
+                struct pollfd pfd = {fd, POLLOUT, 0};
+                int pr;
+                do
+                    pr = ::poll(&pfd, 1, timeout_ms);
+                while (pr < 0 && errno == EINTR);
+                if (pr > 0)
                 {
                     int err = 0;
                     socklen_t l = sizeof err;
@@ -128,15 +132,21 @@ namespace vc
 
     Result<std::size_t> Socket::recv(std::span<std::uint8_t> buf, int timeout_ms)
     {
-        fd_set r;
-        FD_ZERO(&r);
-        FD_SET(static_cast<int>(fd_), &r);
-        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-        int sel =
-            select(static_cast<int>(fd_) + 1, &r, nullptr, nullptr, timeout_ms < 0 ? nullptr : &tv);
-        if (sel == 0) return std::unexpected(Error::Timeout);
-        if (sel < 0) return std::unexpected(Error::Io);
-        ssize_t n = ::recv(static_cast<int>(fd_), buf.data(), buf.size(), 0);
+        /* poll, not select: select indexes a fixed-size bitmap, so a descriptor
+         * at or above FD_SETSIZE writes out of bounds. A negative timeout means
+         * wait indefinitely, which is poll's own convention. */
+        struct pollfd pfd = {static_cast<int>(fd_), POLLIN, 0};
+        int pr;
+        do
+            pr = ::poll(&pfd, 1, timeout_ms);
+        while (pr < 0 && errno == EINTR);
+        if (pr == 0) return std::unexpected(Error::Timeout);
+        if (pr < 0) return std::unexpected(Error::Io);
+
+        ssize_t n;
+        do
+            n = ::recv(static_cast<int>(fd_), buf.data(), buf.size(), 0);
+        while (n < 0 && errno == EINTR);
         if (n == 0) return std::size_t{0};
         if (n < 0) return std::unexpected(Error::Io);
         return static_cast<std::size_t>(n);

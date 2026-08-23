@@ -160,7 +160,12 @@ void        FreeAdapterString(char* p);
 const char* GetAdapterInfo(void);                        /* static JSON  */
 ```
 
-All strings crossing the boundary are **UTF-8**. Command shape:
+All strings crossing the boundary are **UTF-8**. Memory never crosses it to
+be freed: the adapter allocates its result and frees it in its own
+`FreeAdapterString`, which the host calls. The host and each adapter link
+`vc_core` separately, so they do not share a heap.
+
+Command shape:
 
 ```json
 { "Adapter": "FileSystem", "Command": "CreateFile",

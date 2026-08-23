@@ -28,6 +28,7 @@
 #ifdef __cplusplus
 
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,15 +62,28 @@ namespace vc
 
     /* Short human-readable name for an error code (for logging/diagnostics). */
     std::string_view error_str(Error e) noexcept;
+
+    /*
+     * Parse a whole unsigned integer, or nothing. Rejects a partial parse, a
+     * sign, an empty string and anything above max. Use this for any value
+     * that arrives from off the machine: atoi and atol report neither
+     * overflow nor "not a number", and their result for "-1" survives a cast
+     * to an unsigned type as a very large number.
+     */
+    [[nodiscard]] std::optional<std::uint64_t> parse_uint(std::string_view text, std::uint64_t max,
+                                                          int base = 10) noexcept;
 } // namespace vc
 
 #endif /* __cplusplus */
 
 /* ------------------------------------------------------------------------
- * Allocator boundary for the adapter DLL contract: the host allocates a
- * buffer that a dynamically loaded adapter frees (and vice versa), so both
- * sides must share one allocator. Not for general use - prefer std::
- * containers in new code.
+ * Allocator for the adapter ABI. Memory never crosses the boundary to be
+ * freed: an adapter allocates its result here and frees it in its own
+ * FreeAdapterString, which the host calls. That is what makes the contract
+ * safe, because vc_core is linked statically into both the host and each
+ * adapter, so each has its own copy of these functions and its own heap.
+ * Never free here what the other side allocated. Not for general use -
+ * prefer std:: containers in new code.
  * ---------------------------------------------------------------------- */
 #ifdef __cplusplus
 extern "C"

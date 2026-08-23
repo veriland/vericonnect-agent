@@ -72,7 +72,14 @@ namespace vc
         if (i < rest.size() && rest[i] == ':')
         {
             i++;
-            out.port = std::atoi(std::string(rest.substr(i)).c_str());
+            /* The rendezvous address comes from the relay service, so the port
+             * is off-machine input: reject anything outside 1-65535. */
+            std::size_t pe = i;
+            while (pe < rest.size() && rest[pe] != '/' && rest[pe] != '?')
+                pe++;
+            const auto port = parse_uint(rest.substr(i, pe - i), 65535);
+            if (!port || *port == 0) return std::unexpected(Error::Protocol);
+            out.port = static_cast<int>(*port);
             while (i < rest.size() && rest[i] != '/' && rest[i] != '?')
                 i++;
         }

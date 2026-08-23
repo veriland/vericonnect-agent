@@ -35,16 +35,20 @@
 #include "vc/vc_sock.h"
 #include "vc/vc_fs.h"
 
+#include <atomic>
+
 namespace
 {
 
-    volatile bool g_stop = false;
+    /* Set from a console control or signal handler, read by the run loop.
+     * atomic rather than volatile. */
+    std::atomic<bool> g_stop{false};
 
 #if defined(_WIN32)
 #include <windows.h>
     BOOL WINAPI ctrl_handler(DWORD)
     {
-        g_stop = true;
+        g_stop.store(true, std::memory_order_relaxed);
         return TRUE;
     }
     void install_ctrl_handler()
@@ -54,7 +58,7 @@ namespace
 #else
     void sig_handler(int)
     {
-        g_stop = true;
+        g_stop.store(true, std::memory_order_relaxed);
     }
     void install_ctrl_handler()
     {
@@ -117,7 +121,7 @@ namespace
         vc::agent::Options opts;
         if (const char* sp = arg_value(argc, argv, "--settings")) opts.settings_path = sp;
         opts.verbose = true;
-        return vc::agent::run(opts, [] { return g_stop; }) ? 0 : 1;
+        return vc::agent::run(opts, [] { return g_stop.load(std::memory_order_relaxed); }) ? 0 : 1;
     }
 
     /* ---------------------------------------------------------------- */

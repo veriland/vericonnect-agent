@@ -22,6 +22,7 @@
  * lifecycle. SIGTERM/SIGINT trigger a clean shutdown; SIGPIPE is ignored so a
  * peer dropping the TLS connection cannot kill the process.
  */
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -32,11 +33,16 @@
 namespace
 {
 
-    volatile bool g_stop = false;
+    /* Written from a signal handler, read by the run loop. atomic rather than
+     * volatile, which gives neither atomicity nor ordering; only a lock-free
+     * atomic is safe to touch from a handler. */
+    std::atomic<bool> g_stop{false};
+    static_assert(std::atomic<bool>::is_always_lock_free,
+                  "g_stop is written from a signal handler");
 
     void sig_handler(int)
     {
-        g_stop = true;
+        g_stop.store(true, std::memory_order_relaxed);
     }
 
     void install_signal_handlers()
@@ -92,5 +98,5 @@ int main(int argc, char** argv)
                 opts.verbose ? "console" : "service");
     std::fflush(stdout);
 
-    return vc::agent::run(opts, [] { return g_stop; }) ? 0 : 1;
+    return vc::agent::run(opts, [] { return g_stop.load(std::memory_order_relaxed); }) ? 0 : 1;
 }

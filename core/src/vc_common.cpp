@@ -8,11 +8,30 @@
  */
 
 #include "vc/vc_common.h"
+
+#include <charconv>
 #include "vc/vc_transport.h"
 #include "vc/vc_tls.h"
 #include "vc/vc_sock.h"
 
 #include <cstdlib>
+
+namespace vc
+{
+    std::optional<std::uint64_t> parse_uint(std::string_view text, std::uint64_t max,
+                                            int base) noexcept
+    {
+        if (text.empty()) return std::nullopt;
+        if (text.front() == '-' || text.front() == '+') return std::nullopt;
+        std::uint64_t v = 0;
+        const char* first = text.data();
+        const char* last = text.data() + text.size();
+        const auto r = std::from_chars(first, last, v, base);
+        if (r.ec != std::errc{} || r.ptr != last) return std::nullopt;
+        if (v > max) return std::nullopt;
+        return v;
+    }
+} // namespace vc
 
 namespace vc
 {

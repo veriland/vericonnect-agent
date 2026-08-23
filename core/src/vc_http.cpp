@@ -22,6 +22,10 @@ namespace vc::http
 {
     namespace
     {
+        /* Matches the WebSocket message cap: a response must not be able to
+         * grow until the process runs out of memory. */
+        constexpr std::size_t kMaxResponseBytes = 64u * 1024 * 1024;
+
         bool istarts_with(std::string_view s, std::string_view prefix) noexcept
         {
             if (s.size() < prefix.size()) return false;
@@ -73,9 +77,16 @@ namespace vc::http
             const char* end = body.data() + body.size();
             while (p < end)
             {
-                char* after = nullptr;
-                long chunk = std::strtol(p, &after, 16);
-                if (!after || chunk < 0) break;
+                /* Chunk size is hex and must not exceed what we will hold. */
+                const char* size_end = p;
+                while (size_end < end && std::isxdigit(static_cast<unsigned char>(*size_end)))
+                    size_end++;
+                const auto parsed =
+                    parse_uint(std::string_view(p, static_cast<std::size_t>(size_end - p)),
+                               kMaxResponseBytes, 16);
+                if (!parsed) break;
+                long chunk = static_cast<long>(*parsed);
+                const char* after = size_end;
                 /* advance past the CRLF following the size line */
                 const char* crlf = nullptr;
                 for (const char* q = after; q + 1 < end; q++)
@@ -132,6 +143,7 @@ namespace vc::http
             auto n = transport.recv(std::span<std::uint8_t>(tmp, sizeof tmp),
                                     static_cast<int>(deadline - now));
             if (!n || *n == 0) break;
+            if (in.size() + *n > kMaxResponseBytes) return std::unexpected(Error::Protocol);
             in.append(reinterpret_cast<const char*>(tmp), *n);
 
             std::size_t he = in.find("\r\n\r\n");
@@ -142,8 +154,12 @@ namespace vc::http
                 bool chunked = header_contains(head, "Transfer-Encoding", "chunked");
                 if (cl && !chunked)
                 {
-                    long len = std::atol(std::string(*cl).c_str());
-                    if (in.size() >= he + 4 + static_cast<std::size_t>(len)) break;
+                    /* A malformed or oversized length means we cannot know when
+                     * the body ends; fall back to reading until close. */
+                    if (auto len = parse_uint(*cl, kMaxResponseBytes))
+                    {
+                        if (in.size() >= he + 4 + static_cast<std::size_t>(*len)) break;
+                    }
                 }
             }
         }
@@ -157,7 +173,13 @@ namespace vc::http
         if (sp == std::string::npos) return std::unexpected(Error::Protocol);
 
         Response resp;
-        resp.status = std::atoi(in.c_str() + sp + 1);
+        /* Status line: exactly three digits, 100-599. */
+        const std::size_t code_end = in.find_first_not_of("0123456789", sp + 1);
+        const std::string_view code_txt(
+            in.data() + sp + 1, (code_end == std::string::npos ? in.size() : code_end) - (sp + 1));
+        const auto code = parse_uint(code_txt, 599);
+        if (!code || *code < 100) return std::unexpected(Error::Protocol);
+        resp.status = static_cast<int>(*code);
         std::size_t sp2 = in.find(' ', sp + 1);
         std::size_t eol = in.find("\r\n");
         if (sp2 != std::string::npos && eol != std::string::npos && sp2 < eol)
