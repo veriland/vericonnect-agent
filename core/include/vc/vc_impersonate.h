@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_impersonate.h - run a single adapter command under a caller-supplied
  * user identity ("UserCredentials" in the command JSON).
  *
@@ -50,9 +59,8 @@ namespace vc
          *   domain   : domain or machine name; empty or "." = local.
          *   password : plaintext password (UTF-8); may be empty.
          */
-        static std::expected<Impersonation, ImpersonationError> begin(std::string_view user,
-                                                                      std::string_view domain,
-                                                                      std::string_view password);
+        [[nodiscard]] static std::expected<Impersonation, ImpersonationError> begin(
+            std::string_view user, std::string_view domain, std::string_view password);
 
     private:
         struct Impl;

@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * Azure Relay Hybrid Connections listener.
  *
  * Protocol (see Azure Relay "Hybrid Connections protocol guide"):
@@ -229,7 +238,7 @@ namespace vc
                         if (inner) handle_request(*rws, *inner, false);
                     }
                 }
-                rws->send_close(1000);
+                (void)rws->send_close(1000);
                 return;
             }
 
@@ -272,7 +281,7 @@ namespace vc
                 if (rws)
                 {
                     src = send_response_over(*rws, id, resp);
-                    rws->send_close(1000);
+                    (void)rws->send_close(1000);
                 }
                 else
                 {
@@ -338,7 +347,7 @@ namespace vc
                     std::uint64_t now = os::monotonic_ms();
                     if (now >= next_ping_at_)
                     {
-                        ctrl_->send_ping();
+                        (void)ctrl_->send_ping();
                         next_ping_at_ = now + kPingInterval;
                     }
 
@@ -360,7 +369,7 @@ namespace vc
 
                 if (ctrl_)
                 {
-                    if (stop()) ctrl_->send_close(1000);
+                    if (stop()) (void)ctrl_->send_close(1000);
                     ctrl_.reset();
                 }
             }

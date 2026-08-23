@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * FileSystem adapter commands, including ReadFile's "move the file into a COPY
  * subfolder after reading" semantics.
  */
@@ -107,7 +116,7 @@ namespace fs_cmd
                 std::string prefix = folder.substr(0, i);
                 /* skip drive roots like "C:" and UNC prefixes */
                 if (prefix.size() > 2 || (prefix[1] != ':' && prefix[0] != '\\'))
-                    vc::fs::mkdir(prefix);
+                    (void)vc::fs::mkdir(prefix);
             }
         }
         if (!vc::fs::mkdir(folder))
@@ -169,13 +178,16 @@ namespace fs_cmd
         int status = 200;
         std::string desc = std::format("File {} read successfully", *path);
 
-        if (!vc::fs::dir_exists(copy_dir)) vc::fs::mkdir(copy_dir);
+        /* A failed mkdir surfaces as a failed move just below. */
+        if (!vc::fs::dir_exists(copy_dir)) (void)vc::fs::mkdir(copy_dir);
+
+        vc::Status archived; /* default-constructed = success, for the 409 path */
         if (vc::fs::file_exists(dest))
         {
             if (overwrite)
             {
-                vc::fs::remove_file(dest);
-                vc::fs::move(*path, dest);
+                (void)vc::fs::remove_file(dest); /* a failure here fails the move */
+                archived = vc::fs::move(*path, dest);
             }
             else
             {
@@ -185,7 +197,18 @@ namespace fs_cmd
         }
         else
         {
-            vc::fs::move(*path, dest);
+            archived = vc::fs::move(*path, dest);
+        }
+
+        /* The read itself succeeded and Data is returned either way. But if the
+         * archive move failed the source file is still sitting in the polled
+         * folder, so it will be read again on the next poll - reporting 200 here
+         * would hide a duplicate-delivery bug. */
+        if (status == 200 && !archived)
+        {
+            status = 500;
+            desc = std::format("File {} was read but could not be archived to {}: {}", *path, dest,
+                               vc::error_str(archived.error()));
         }
 
         Json o = Json::object();
@@ -230,8 +253,9 @@ namespace fs_cmd
             return result_json(
                 409, std::format("File {} already exists and overwrite is not allowed.", dest));
 
-        if (!vc::fs::dir_exists(std::string(dest_folder))) vc::fs::mkdir(std::string(dest_folder));
-        if (vc::fs::file_exists(dest)) vc::fs::remove_file(dest);
+        if (!vc::fs::dir_exists(std::string(dest_folder)))
+            (void)vc::fs::mkdir(std::string(dest_folder));
+        if (vc::fs::file_exists(dest)) (void)vc::fs::remove_file(dest);
         return vc::fs::move(*src, dest)
                    ? result_json(200, std::format("File moved from {} to {}", *src, dest))
                    : result_json(400, std::format("Error moving file {} to {}", *src, dest));

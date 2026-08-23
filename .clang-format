@@ -4,7 +4,7 @@
 ---
 Language:        Cpp
 BasedOnStyle:    Microsoft
-Standard:        c++20
+Standard:        Latest       # C++23; clang-format has no c++23 enumerator
 ColumnLimit:     100
 IndentWidth:     4
 TabWidth:        4

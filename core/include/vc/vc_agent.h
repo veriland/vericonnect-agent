@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_agent.h - the reusable agent core: loads settings + adapters and pumps
  * the relay listener, dispatching incoming commands to adapters.
  *
@@ -25,7 +34,7 @@ namespace vc::agent
 
     /* Blocking; returns when stop_requested() becomes true (or a fatal init
      * error). */
-    Status run(const Options& opts, const std::function<bool()>& stop_requested);
+    [[nodiscard]] Status run(const Options& opts, const std::function<bool()>& stop_requested);
 } // namespace vc::agent
 
 #endif /* __cplusplus */

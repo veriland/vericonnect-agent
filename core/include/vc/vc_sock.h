@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_sock.h - minimal TCP client socket abstraction.
  * Implemented per platform (platform/win, platform/posix).
  */
@@ -31,14 +40,15 @@ namespace vc
         static void global_cleanup() noexcept;
 
         /* Connect to host:port (TCP). timeout_ms bounds the connect. */
-        static Result<Socket> connect(const std::string& host, int port, int timeout_ms);
+        [[nodiscard]] static Result<Socket> connect(const std::string& host, int port,
+                                                    int timeout_ms);
 
         /* Send all bytes; returns the count sent or an error. */
-        Result<std::size_t> send(std::span<const std::uint8_t> data);
+        [[nodiscard]] Result<std::size_t> send(std::span<const std::uint8_t> data);
 
         /* Returns bytes read (>0), 0 on orderly close, or an error
          * (Error::Timeout if nothing arrived within timeout_ms). */
-        Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
+        [[nodiscard]] Result<std::size_t> recv(std::span<std::uint8_t> buf, int timeout_ms);
 
         bool valid() const noexcept
         {

@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc-selftest - unit checks for the portable core.
  * Exit code 0 = all passed.
  */
@@ -163,7 +172,7 @@ namespace
             check("get int", loaded->get_int("Logging", "MaxRotateFiles", 0) == 7);
             check("default", loaded->get_int("Logging", "Missing", 42) == 42);
         }
-        vc::fs::remove_file(path);
+        (void)vc::fs::remove_file(path);
     }
 
     int status_of(const std::string& res)
@@ -194,7 +203,7 @@ namespace
         }
 
         std::string tmp = vc::fs::join(exe_dir, "selftest-fs");
-        vc::fs::mkdir(tmp);
+        (void)vc::fs::mkdir(tmp);
 
         /* CreateFile */
         {
@@ -237,7 +246,7 @@ namespace
 
         std::string copyfile = vc::fs::join(vc::fs::join(tmp, "COPY"), "hello.txt");
         check("moved to COPY", vc::fs::file_exists(copyfile));
-        vc::fs::remove_file(copyfile);
+        (void)vc::fs::remove_file(copyfile);
 
         /* unknown command yields 404 */
         check("unknown cmd 404",

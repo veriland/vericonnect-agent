@@ -112,7 +112,10 @@ namespace vc::agent
         }
         if (std::optional<std::string> dir = fs::exe_dir())
             settings.logging.file_path = fs::join(*dir, "VeriConnect.log");
-        log::init(settings.logging);
+        /* A failure here (unwritable log file) leaves the logger
+         * uninitialised, which log::write already handles by echoing to
+         * stderr - so the agent starts rather than refusing to run. */
+        (void)log::init(settings.logging);
 
         log::message(log::Level::Info, "VeriConnect agent starting");
         if (!loaded)

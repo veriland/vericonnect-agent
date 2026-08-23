@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_json.h - JSON parser / writer.
  *
  * Supports the full JSON grammar (objects, arrays, strings with escapes
@@ -43,7 +52,7 @@ namespace vc
         static Json object();
 
         /* Parse a complete JSON document (trailing junk is rejected). */
-        static Result<Json> parse(std::string_view text);
+        [[nodiscard]] static Result<Json> parse(std::string_view text);
 
         Type type() const noexcept
         {

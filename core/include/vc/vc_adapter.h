@@ -1,4 +1,13 @@
 /*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
+/*
  * vc_adapter.h - adapter ABI + host-side loader.
  *
  * ABI (C, UTF-8, cdecl) exported by every adapter shared library:
@@ -67,7 +76,7 @@ namespace vc
         DynLib(const DynLib&) = delete;
         DynLib& operator=(const DynLib&) = delete;
 
-        static std::optional<DynLib> open(const std::string& path);
+        [[nodiscard]] static std::optional<DynLib> open(const std::string& path);
         void* symbol(const char* name) const;
         explicit operator bool() const noexcept
         {
@@ -88,7 +97,7 @@ namespace vc
         Adapter& operator=(Adapter&&) noexcept = default;
 
         /* Load from a shared library; nullopt if it lacks the adapter exports. */
-        static std::optional<Adapter> load(const std::string& path);
+        [[nodiscard]] static std::optional<Adapter> load(const std::string& path);
 
         const std::string& id() const noexcept
         {
@@ -117,7 +126,7 @@ namespace vc
     {
     public:
         /* Load every shared library exposing the adapter exports in dir. */
-        Status load(const std::string& dir);
+        [[nodiscard]] Status load(const std::string& dir);
 
         /* Find by adapter id (case-insensitive); nullptr if absent. */
         const Adapter* find(std::string_view id) const;

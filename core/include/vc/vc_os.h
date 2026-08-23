@@ -1,3 +1,12 @@
+/*
+ * Copyright (c) 2026 Veriland Consulting Ltd.
+ *
+ * SPDX-License-Identifier: FSL-1.1-Apache-2.0
+ *
+ * Licensed under the Functional Source License, Version 1.1, Apache 2.0 Future
+ * License. See the LICENSE file in the project root for the full terms.
+ */
+
 /* vc_os.h - misc OS helpers implemented per platform. */
 #ifndef VC_OS_H
 #define VC_OS_H
@@ -18,7 +27,7 @@ namespace vc::os
     std::uint64_t monotonic_ms() noexcept;
 
     /* Fill buf with cryptographically secure random bytes. */
-    Status random_bytes(std::span<std::uint8_t> buf);
+    [[nodiscard]] Status random_bytes(std::span<std::uint8_t> buf);
 } // namespace vc::os
 
 #endif /* __cplusplus */
