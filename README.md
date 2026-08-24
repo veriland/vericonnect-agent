@@ -56,7 +56,8 @@ everything in `core/` compiles anywhere; only
 Linux/macOS host (`apps/agent-posix`) and the console test app all call
 the same `vc_agent_run()`; only process hosting differs. The
 `platform/posix/` layer is OpenSSL based (see the macOS build notes
-below) and not yet CI-tested.
+below); CI builds it and runs the self-test on Linux, but macOS is not
+covered.
 
 The design rules behind this layout — physical layering, RAII
 ownership, `Result`/`Status` error handling and how SOLID maps onto a
