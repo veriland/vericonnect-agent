@@ -14,7 +14,10 @@
  * plain std::string uses the OS narrow encoding (ACP on Windows), so paths are
  * converted through char8_t to force UTF-8 interpretation on every platform. */
 #include "vc/vc_fs.h"
+#include "vc/vc_os.h"
 
+#include <cerrno>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
@@ -25,6 +28,17 @@ namespace vc::fs
 {
     namespace
     {
+        /*
+         * std::error_code from std::filesystem is the OS's own code in the
+         * system category - errno on POSIX, a Win32 code on Windows - so it
+         * lands in the same space os::error_text() renders and can be carried
+         * straight through.
+         */
+        Error with_code(ErrorCode code, const std::error_code& ec) noexcept
+        {
+            return Error{code, static_cast<std::uint32_t>(ec.value())};
+        }
+
         stdfs::path to_path(std::string_view utf8)
         {
             return stdfs::path(
@@ -55,13 +69,14 @@ namespace vc::fs
         std::error_code ec;
         if (stdfs::create_directory(to_path(path), ec)) return {};
         if (dir_exists(path)) return {};
-        return std::unexpected(Error::Io);
+        return std::unexpected(with_code(Error::Io, ec));
     }
 
     Status remove_file(const std::string& path)
     {
         std::error_code ec;
-        return stdfs::remove(to_path(path), ec) ? Status{} : std::unexpected(Error::Io);
+        return stdfs::remove(to_path(path), ec) ? Status{}
+                                                : std::unexpected(with_code(Error::Io, ec));
     }
 
     Status move(const std::string& from, const std::string& to)
@@ -69,33 +84,38 @@ namespace vc::fs
         std::error_code ec;
         if (stdfs::exists(to_path(to), ec)) return std::unexpected(Error::Exists);
         stdfs::rename(to_path(from), to_path(to), ec);
-        return ec ? std::unexpected(Error::Io) : Status{};
+        return ec ? std::unexpected(with_code(Error::Io, ec)) : Status{};
     }
 
     Result<Bytes> read_all(const std::string& path)
     {
+        /* A failed stream reports nothing but "failed"; the open sets errno
+         * on every implementation we build for, so clear it first and the code
+         * that survives is this open's. */
+        errno = 0;
         std::ifstream f(to_path(path), std::ios::binary);
-        if (!f) return std::unexpected(Error::NotFound);
+        if (!f) return std::unexpected(os::last_error(Error::NotFound));
         Bytes out{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
-        if (f.bad()) return std::unexpected(Error::Io);
+        if (f.bad()) return std::unexpected(os::last_error(Error::Io));
         return out;
     }
 
     Status write_all(const std::string& path, std::span<const std::uint8_t> data)
     {
+        errno = 0;
         std::ofstream f(to_path(path), std::ios::binary | std::ios::trunc);
-        if (!f) return std::unexpected(Error::Io);
+        if (!f) return std::unexpected(os::last_error(Error::Io));
         if (!data.empty())
             f.write(reinterpret_cast<const char*>(data.data()),
                     static_cast<std::streamsize>(data.size()));
-        return f.good() ? Status{} : std::unexpected(Error::Io);
+        return f.good() ? Status{} : std::unexpected(os::last_error(Error::Io));
     }
 
     Result<std::vector<std::string>> list_files(const std::string& dir)
     {
         std::error_code ec;
         stdfs::directory_iterator it(to_path(dir), ec), end;
-        if (ec) return std::unexpected(Error::NotFound);
+        if (ec) return std::unexpected(with_code(Error::NotFound, ec));
 
         std::vector<std::string> names;
         for (; it != end; it.increment(ec))

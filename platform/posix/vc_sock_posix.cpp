@@ -9,10 +9,10 @@
 
 /* POSIX TCP client socket (Linux/macOS). */
 #include "vc/vc_sock.h"
-#include "vc/vc_log.h"
 #include "vc/vc_os.h"
 
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -70,11 +70,23 @@ namespace vc
         if (getaddrinfo(host.c_str(), portstr, &hints, &res) != 0 || !res)
             return std::unexpected(Error::NotFound);
 
+        /*
+         * Why the failure code is captured in the loop rather than read after
+         * it: close() and freeaddrinfo() below are both entitled to set errno,
+         * and the asynchronous path never sets it at all - there the real
+         * reason arrives in SO_ERROR. Reading errno at the bottom would report
+         * the cleanup, or nothing.
+         */
+        std::uint32_t oe = 0;
         int fd = -1;
         for (struct addrinfo* ai = res; ai; ai = ai->ai_next)
         {
             fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (fd < 0) continue;
+            if (fd < 0)
+            {
+                oe = os::last_error_code();
+                continue;
+            }
             int fl = fcntl(fd, F_GETFL, 0);
             fcntl(fd, F_SETFL, fl | O_NONBLOCK);
             int cr = ::connect(fd, ai->ai_addr, ai->ai_addrlen);
@@ -83,7 +95,9 @@ namespace vc
                 fcntl(fd, F_SETFL, fl);
                 break;
             }
-            if (errno == EINPROGRESS)
+            if (errno != EINPROGRESS)
+                oe = os::last_error_code();
+            else
             {
                 /* poll, not select: select indexes a fixed-size bitmap, so a
                  * descriptor at or above FD_SETSIZE writes out of bounds. */
@@ -102,20 +116,22 @@ namespace vc
                         fcntl(fd, F_SETFL, fl);
                         break;
                     }
+                    /* SO_ERROR, not errno: this is the connect result. */
+                    oe = static_cast<std::uint32_t>(err);
                 }
+                else if (pr == 0)
+                    oe = static_cast<std::uint32_t>(ETIMEDOUT);
+                else
+                    oe = os::last_error_code();
             }
             ::close(fd);
             fd = -1;
         }
         freeaddrinfo(res);
-        if (fd < 0)
-        {
-            /* Error::Io alone cannot distinguish refused from unreachable from
-             * timed out; the OS code can. */
-            log::message(log::Level::Error, "connect to {}:{} failed - {}", host, port,
-                         os::last_error_text());
-            return std::unexpected(Error::Io);
-        }
+        /* Error::Io alone cannot distinguish refused from unreachable from
+         * timed out; the OS code can, and it travels with the Error to
+         * whoever handles it (DESIGN.md section 3 - logged there, not here). */
+        if (fd < 0) return std::unexpected(Error{Error::Io, oe});
 
         int ka = 1;
         setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof ka);
@@ -132,7 +148,7 @@ namespace vc
             if (n <= 0)
             {
                 if (errno == EINTR) continue;
-                return std::unexpected(Error::Io);
+                return std::unexpected(os::last_error(Error::Io));
             }
             sent += static_cast<std::size_t>(n);
         }
@@ -150,14 +166,14 @@ namespace vc
             pr = ::poll(&pfd, 1, timeout_ms);
         while (pr < 0 && errno == EINTR);
         if (pr == 0) return std::unexpected(Error::Timeout);
-        if (pr < 0) return std::unexpected(Error::Io);
+        if (pr < 0) return std::unexpected(os::last_error(Error::Io));
 
         ssize_t n;
         do
             n = ::recv(static_cast<int>(fd_), buf.data(), buf.size(), 0);
         while (n < 0 && errno == EINTR);
         if (n == 0) return std::size_t{0};
-        if (n < 0) return std::unexpected(Error::Io);
+        if (n < 0) return std::unexpected(os::last_error(Error::Io));
         return static_cast<std::size_t>(n);
     }
 } // namespace vc

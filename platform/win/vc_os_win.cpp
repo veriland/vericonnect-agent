@@ -47,9 +47,14 @@ namespace vc::os
                          static_cast<int>(st.wMilliseconds)};
     }
 
-    std::string last_error_text()
+    std::uint32_t last_error_code() noexcept
     {
-        const DWORD e = GetLastError();
+        return static_cast<std::uint32_t>(GetLastError());
+    }
+
+    std::string error_text(std::uint32_t code)
+    {
+        const DWORD e = static_cast<DWORD>(code);
         if (e == 0) return {};
         char* msg = nullptr;
         const DWORD n = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
@@ -69,6 +74,11 @@ namespace vc::os
             text += "unknown";
         if (msg) LocalFree(msg);
         return text;
+    }
+
+    std::string last_error_text()
+    {
+        return error_text(last_error_code());
     }
 
     const char* shared_library_extension() noexcept

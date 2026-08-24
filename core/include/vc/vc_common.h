@@ -35,8 +35,8 @@
 
 namespace vc
 {
-    /* Generic result codes (negative = error). */
-    enum class Error : int
+    /* Generic result categories (negative = error). */
+    enum class ErrorCode : int
     {
         Fail = -1,
         NoMem = -2,
@@ -51,6 +51,77 @@ namespace vc
         Unsupported = -11,
     };
 
+    /*
+     * A failure: the category, and the platform's own code for it where a
+     * platform call is what failed. The category alone is too coarse to
+     * diagnose from - Io is equally true of a refused connection, a peer that
+     * hung up and a full disk - and logging the OS code at the point of
+     * failure only helps whoever can read that machine's log. Carrying it here
+     * puts it where the caller can also act on it.
+     *
+     * os_code() is errno on POSIX and GetLastError on Windows (WSAGetLastError
+     * returns the same value), which is the one code space os::error_text()
+     * renders. It is 0 when no platform call was involved - a protocol
+     * violation, a cap we enforce ourselves - and, for now, for Error::Tls:
+     * SChannel's SECURITY_STATUS and OpenSSL's error queue are separate code
+     * spaces and each needs its own renderer to be worth carrying.
+     *
+     * Implicitly constructible from ErrorCode, so `Error::Io` and
+     * `std::unexpected(Error::Io)` read and compile as they always have.
+     */
+    class Error
+    {
+    public:
+        /* The categories, kept spelled `Error::Io` at every call site. */
+        static constexpr ErrorCode Fail = ErrorCode::Fail;
+        static constexpr ErrorCode NoMem = ErrorCode::NoMem;
+        static constexpr ErrorCode InvalidArg = ErrorCode::InvalidArg;
+        static constexpr ErrorCode NotFound = ErrorCode::NotFound;
+        static constexpr ErrorCode Io = ErrorCode::Io;
+        static constexpr ErrorCode Timeout = ErrorCode::Timeout;
+        static constexpr ErrorCode Closed = ErrorCode::Closed;
+        static constexpr ErrorCode Protocol = ErrorCode::Protocol;
+        static constexpr ErrorCode Tls = ErrorCode::Tls;
+        static constexpr ErrorCode Exists = ErrorCode::Exists;
+        static constexpr ErrorCode Unsupported = ErrorCode::Unsupported;
+
+        constexpr Error(ErrorCode code) noexcept : code_(code) {}
+        constexpr Error(ErrorCode code, std::uint32_t os_code) noexcept
+            : code_(code), os_code_(os_code)
+        {
+        }
+
+        [[nodiscard]] constexpr ErrorCode code() const noexcept
+        {
+            return code_;
+        }
+
+        [[nodiscard]] constexpr std::uint32_t os_code() const noexcept
+        {
+            return os_code_;
+        }
+
+        /*
+         * Comparing against a category ignores the OS code: control flow
+         * turns on "was this a timeout", never on which timeout. Comparing two
+         * Errors is full value equality, because that is what a value type
+         * comparing to itself should mean.
+         */
+        friend constexpr bool operator==(const Error& a, ErrorCode b) noexcept
+        {
+            return a.code_ == b;
+        }
+
+        friend constexpr bool operator==(const Error& a, const Error& b) noexcept
+        {
+            return a.code_ == b.code_ && a.os_code_ == b.os_code_;
+        }
+
+    private:
+        ErrorCode code_;
+        std::uint32_t os_code_ = 0;
+    };
+
     /* A value of type T on success, or an Error. */
     template <class T> using Result = std::expected<T, Error>;
 
@@ -60,8 +131,16 @@ namespace vc
     /* Owned byte buffer. */
     using Bytes = std::vector<std::uint8_t>;
 
-    /* Short human-readable name for an error code (for logging/diagnostics). */
+    /* Short human-readable name for an error category (for logging/diagnostics). */
     std::string_view error_str(Error e) noexcept;
+
+    /*
+     * error_str plus the platform code and its text when one was captured:
+     * "I/O error (61: Connection refused)", or just "I/O error" when it was
+     * not. This is the form to log; error_str alone is the form to fit in a
+     * fixed field.
+     */
+    [[nodiscard]] std::string error_detail(Error e);
 
     /*
      * Parse a whole unsigned integer, or nothing. Rejects a partial parse, a

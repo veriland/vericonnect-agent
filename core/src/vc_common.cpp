@@ -13,6 +13,7 @@
 #include "vc/vc_transport.h"
 #include "vc/vc_tls.h"
 #include "vc/vc_sock.h"
+#include "vc/vc_os.h"
 
 #include <cstdlib>
 
@@ -37,7 +38,7 @@ namespace vc
 {
     std::string_view error_str(Error e) noexcept
     {
-        switch (e)
+        switch (e.code())
         {
         case Error::Fail:
             return "failure";
@@ -63,6 +64,18 @@ namespace vc
             return "unsupported";
         }
         return "unknown error";
+    }
+
+    std::string error_detail(Error e)
+    {
+        std::string out(error_str(e));
+        if (e.os_code() == 0) return out;
+        std::string os = os::error_text(e.os_code());
+        if (os.empty()) return out;
+        out += " (";
+        out += os;
+        out += ')';
+        return out;
     }
 } // namespace vc
 

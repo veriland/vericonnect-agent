@@ -51,12 +51,35 @@ namespace vc::os
     [[nodiscard]] const char* shared_library_extension() noexcept;
 
     /*
-     * The last OS error on this thread as "code: text" (errno on POSIX,
-     * GetLastError on Windows). vc::Error says only that I/O failed; this says
-     * which I/O failure, which is the difference between a diagnosable field
-     * report and a guess.
+     * The last OS error on this thread, raw: errno on POSIX, GetLastError on
+     * Windows (WSAGetLastError returns the same value). 0 when there is none.
+     *
+     * Read this at the point of failure. Almost any intervening call - a
+     * close(), a free, a log line - is entitled to overwrite it, so a cleanup
+     * path between the failure and the read will lose or falsify it.
+     */
+    [[nodiscard]] std::uint32_t last_error_code() noexcept;
+
+    /* A code from last_error_code() rendered as "code: text". Empty for 0. */
+    [[nodiscard]] std::string error_text(std::uint32_t code);
+
+    /*
+     * The last OS error on this thread as "code: text". vc::Error's category
+     * says only that I/O failed; this says which I/O failure, which is the
+     * difference between a diagnosable field report and a guess.
      */
     [[nodiscard]] std::string last_error_text();
+
+    /*
+     * `code` tagged with the last OS error, for
+     * `return std::unexpected(os::last_error(Error::Io));` at the point a
+     * platform call fails. Subject to the same read-it-now caveat as
+     * last_error_code().
+     */
+    [[nodiscard]] inline Error last_error(ErrorCode code) noexcept
+    {
+        return Error{code, last_error_code()};
+    }
 } // namespace vc::os
 
 #endif /* __cplusplus */

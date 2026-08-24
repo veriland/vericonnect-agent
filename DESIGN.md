@@ -114,6 +114,12 @@ that is what keeps them independently buildable and replaceable.
 - **Errors are values, and they are logged where they are handled, not
   where they are produced.** Deep code returns; the run loop decides
   severity.
+- **An error carries the platform code that produced it.** `vc::Error` is
+  a category *and* the OS code behind it — `errno`, `GetLastError`,
+  `std::error_code::value()` — captured at the point of failure, before a
+  `close()` or a `freeaddrinfo()` can overwrite it, and rendered by
+  `error_detail()`. Comparing against a category ignores the code:
+  control flow turns on "was this a timeout", never on which timeout.
 - **Never let a credential into an error message.** `ImpersonationError`
   carries a message documented as log-safe; keep it that way.
 
@@ -204,6 +210,34 @@ checks §1 and part of §2–§4 mechanically.
       §4's insulation is intact. And the relay needed its *dialler*
       injected, not just a transport, because it opens rendezvous
       connections mid-stream.
+- [x] **The OS code behind an `Error`** (#25). `Error` was a bare enum,
+      so every I/O failure reached its caller as `Error::Io` — the same
+      value for a refused connection, a peer that hung up and a full
+      disk. It is now a value type carrying the category *and* the
+      platform code, `error_detail()` renders both, and the socket,
+      filesystem, random and impersonation paths capture the code where
+      the call actually fails.
+
+      Two things are worth recording. The old spelling survived: the
+      categories are `static constexpr ErrorCode` members of `Error`, so
+      `Error::Io` and `std::unexpected(Error::Io)` still compile at all
+      150 construction sites, and the diff stayed in the platform layer
+      the codes come from rather than spreading across core.
+
+      And capturing *at* the failure rather than after it was most of the
+      work. `connect()`'s asynchronous path never sets `errno` at all —
+      the reason arrives in `SO_ERROR` — and the cleanup between the
+      failure and the return overwrites whatever was there, so the log
+      line #30 added on POSIX could report the cleanup instead of the
+      failure. Both platforms now capture inside the loop; that log line
+      is gone, because §3 logs where the error is handled and the code
+      now reaches the relay's `CONNECT_FAILED` and `RENDEZVOUS_FAILED`
+      events, which is what an operator reads.
+
+      Deliberately not carried: `Error::Tls`. SChannel's
+      `SECURITY_STATUS` and OpenSSL's error queue are separate code
+      spaces, and each needs its own renderer before there is any point
+      putting them in a field documented as holding an OS code.
 - [x] **`[[nodiscard]]` on the 37 fallible declarations** in
       `core/include/vc/`. Sixteen of the seventeen discards it found
       were best-effort and are now explicit `(void)` casts; the

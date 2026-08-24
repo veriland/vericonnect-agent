@@ -34,6 +34,8 @@
 #include "vc/vc_relay.h"
 #include "vc/vc_relay_testing.h"
 #include "vc/vc_log.h"
+#include "vc/vc_os.h"
+#include "vc/vc_sock.h"
 
 namespace
 {
@@ -1239,6 +1241,67 @@ namespace
         check("zero accepted", vc::parse_uint("0", 100) == 0u);
     }
 
+    void test_error()
+    {
+        std::printf("Error\n");
+        using vc::Error;
+
+        /* A category on its own carries no platform code and renders as it
+         * always did. */
+        const Error plain{Error::Io};
+        check("bare category has no OS code", plain.os_code() == 0);
+        check("bare category renders as the category",
+              vc::error_detail(plain) == vc::error_str(plain));
+
+        /* Tagged with one, it keeps both halves. */
+        const Error tagged{Error::Io, 61};
+        check("tagged keeps the category", tagged.code() == Error::Io);
+        check("tagged keeps the OS code", tagged.os_code() == 61);
+
+        /* Control flow turns on the category and must not see the code. */
+        check("category comparison ignores the OS code", tagged == Error::Io);
+        check("category comparison still discriminates", !(tagged == Error::Timeout));
+
+        /* Comparing two Errors is full value equality, code included. */
+        check("same category and code are equal", tagged == Error{Error::Io, 61});
+        check("same category, different code differ", !(tagged == Error{Error::Io, 111}));
+
+        /* The point of the change: it survives the trip out through Result,
+         * which is what a caller sees. */
+        const auto fail = [](std::uint32_t os) -> vc::Result<int>
+        { return std::unexpected(Error{Error::Io, os}); };
+        check("OS code survives Result", fail(42).error().os_code() == 42);
+
+        /* And the untagged spelling still compiles, meaning "no OS code". */
+        const auto bare = []() -> vc::Status { return std::unexpected(Error::Io); };
+        check("untagged spelling means no OS code", bare().error().os_code() == 0);
+
+        /* Rendering. Code 2 is ENOENT on POSIX and ERROR_FILE_NOT_FOUND on
+         * Windows: different text either way, both prefixed with the number. */
+        check("zero renders empty", vc::os::error_text(0).empty());
+        {
+            const std::string two = vc::os::error_text(2);
+            check("code rendered with its number", two.rfind("2: ", 0) == 0);
+            check("code rendered with its text", two.size() > 3);
+        }
+        {
+            const std::string d = vc::error_detail(Error{Error::Io, 2});
+            check("detail leads with the category",
+                  d.rfind(std::string(vc::error_str(Error::Io)), 0) == 0);
+            check("detail appends the OS code", d.find("(2: ") != std::string::npos);
+        }
+
+        /*
+         * End to end through a real platform call, which is the only check
+         * here that proves the platform layer captures anything. Nothing
+         * listens on port 1; whatever the OS calls that - refused,
+         * unreachable, timed out - it has to arrive as a code rather than a
+         * bare "I/O error".
+         */
+        const vc::Result<vc::Socket> s = vc::Socket::connect("127.0.0.1", 1, 1000);
+        check("connect failure carries an OS code", !s.has_value() && s.error().os_code() != 0);
+    }
+
     void test_url_port()
     {
         std::printf("URL port validation\n");
@@ -1329,6 +1392,7 @@ int main()
     test_json_numbers();
     test_url();
     test_parse_uint();
+    test_error();
     test_url_port();
     test_ini();
     test_adapter_roundtrip();
