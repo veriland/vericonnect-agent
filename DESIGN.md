@@ -156,8 +156,10 @@ inheritance:
   wants a SHA-256 should not compile the relay protocol. Our
   one-header-per-concern layout in `core/include/vc/` is this principle.
 - **Dependency inversion** — see §1. Applied physically to the platform
-  layer; *not yet applied to the transport*, which is the known gap
-  below.
+  layer, and now to the transport as well: `vc::Transport` is a concept,
+  the protocol code is written against it rather than against `Tls` or
+  `Socket`, and that is what made the framing, the HTTP parser and the
+  relay state machine testable (§8).
 
 ## 6. Constraints we hold on purpose
 
