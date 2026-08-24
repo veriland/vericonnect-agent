@@ -255,8 +255,8 @@ namespace
         if (!resp)
         {
             std::fprintf(stderr,
-                         "HTTP request failed (%d). Is the network up and the relay reachable?\n",
-                         static_cast<int>(resp.error()));
+                         "HTTP request failed (%s). Is the network up and the relay reachable?\n",
+                         vc::error_detail(resp.error()).c_str());
             return 1;
         }
 

@@ -10,6 +10,7 @@
 /* Windows TCP client socket (WinSock2). */
 #include "vc/vc_sock.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -19,7 +20,22 @@ namespace vc
     namespace
     {
         LONG g_ws_init = 0;
-    }
+
+        /*
+         * WSAGetLastError returns the same thread-local value GetLastError
+         * does, so os::error_text() renders it; spelling it this way in a
+         * Winsock file records which API set it.
+         */
+        std::uint32_t sock_error_code() noexcept
+        {
+            return static_cast<std::uint32_t>(WSAGetLastError());
+        }
+
+        Error sock_error(ErrorCode code) noexcept
+        {
+            return Error{code, sock_error_code()};
+        }
+    } // namespace
 
     Socket::~Socket()
     {
@@ -81,11 +97,23 @@ namespace vc
         if (getaddrinfo(host.c_str(), portstr, &hints, &res) != 0 || !res)
             return std::unexpected(Error::NotFound);
 
+        /*
+         * Why the failure code is captured in the loop rather than read after
+         * it: closesocket() and freeaddrinfo() below both set the thread's
+         * last error, and the asynchronous path never sets it at all - there
+         * the real reason arrives in SO_ERROR. Reading it at the bottom would
+         * report the cleanup, or nothing.
+         */
+        std::uint32_t oe = 0;
         SOCKET sock = INVALID_SOCKET;
         for (struct addrinfo* ai = res; ai; ai = ai->ai_next)
         {
             sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (sock == INVALID_SOCKET) continue;
+            if (sock == INVALID_SOCKET)
+            {
+                oe = sock_error_code();
+                continue;
+            }
 
             u_long nb = 1;
             ioctlsocket(sock, FIONBIO, &nb);
@@ -96,13 +124,17 @@ namespace vc
                 ioctlsocket(sock, FIONBIO, &nb);
                 break;
             }
-            if (WSAGetLastError() == WSAEWOULDBLOCK)
+            const int ce = WSAGetLastError();
+            if (ce != WSAEWOULDBLOCK)
+                oe = static_cast<std::uint32_t>(ce);
+            else
             {
                 fd_set wfds;
                 FD_ZERO(&wfds);
                 FD_SET(sock, &wfds);
                 struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-                if (select(0, nullptr, &wfds, nullptr, &tv) > 0)
+                const int sr = select(0, nullptr, &wfds, nullptr, &tv);
+                if (sr > 0)
                 {
                     int err = 0;
                     int len = sizeof err;
@@ -113,13 +145,23 @@ namespace vc
                         ioctlsocket(sock, FIONBIO, &nb);
                         break;
                     }
+                    /* SO_ERROR, not the thread's last error: this is the
+                     * connect result. */
+                    oe = static_cast<std::uint32_t>(err);
                 }
+                else if (sr == 0)
+                    oe = static_cast<std::uint32_t>(WSAETIMEDOUT);
+                else
+                    oe = sock_error_code();
             }
             closesocket(sock);
             sock = INVALID_SOCKET;
         }
         freeaddrinfo(res);
-        if (sock == INVALID_SOCKET) return std::unexpected(Error::Io);
+        /* Error::Io alone cannot distinguish refused from unreachable from
+         * timed out; the OS code can, and it travels with the Error to
+         * whoever handles it (DESIGN.md section 3 - logged there, not here). */
+        if (sock == INVALID_SOCKET) return std::unexpected(Error{Error::Io, oe});
 
         BOOL ka = TRUE;
         setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char*>(&ka), sizeof ka);
@@ -134,7 +176,7 @@ namespace vc
         {
             int n =
                 ::send(static_cast<SOCKET>(fd_), p + sent, static_cast<int>(data.size() - sent), 0);
-            if (n == SOCKET_ERROR) return std::unexpected(Error::Io);
+            if (n == SOCKET_ERROR) return std::unexpected(sock_error(Error::Io));
             sent += static_cast<std::size_t>(n);
         }
         return {};
@@ -148,12 +190,12 @@ namespace vc
         struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
         int sel = select(0, &rfds, nullptr, nullptr, timeout_ms < 0 ? nullptr : &tv);
         if (sel == 0) return std::unexpected(Error::Timeout);
-        if (sel == SOCKET_ERROR) return std::unexpected(Error::Io);
+        if (sel == SOCKET_ERROR) return std::unexpected(sock_error(Error::Io));
 
         int n = ::recv(static_cast<SOCKET>(fd_), reinterpret_cast<char*>(buf.data()),
                        static_cast<int>(buf.size()), 0);
         if (n == 0) return std::size_t{0};
-        if (n == SOCKET_ERROR) return std::unexpected(Error::Io);
+        if (n == SOCKET_ERROR) return std::unexpected(sock_error(Error::Io));
         return static_cast<std::size_t>(n);
     }
 } // namespace vc

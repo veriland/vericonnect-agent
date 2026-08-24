@@ -156,7 +156,7 @@ namespace vc
                                     bool has_body);
             Status send_response_over(Ws& ws, std::string_view request_id,
                                       const RelayResponse& resp);
-            std::optional<Ws> rendezvous_connect(const std::string& address);
+            Result<Ws> rendezvous_connect(const std::string& address);
             Result<Bytes> read_body(Ws& ws, bool expected);
             void handle_request(Ws& ws, const Json& req_node, bool on_control);
             void handle_rendezvous_offer(const std::string& address);
@@ -184,7 +184,10 @@ namespace vc
                                "?sb-hc-action=listen&sb-hc-token=" + url_encode(token);
 
             Result<Ws> ws = dial_(cfg_.namespace_host, 443, path, "", kConnectTimeout);
-            if (!ws) return std::unexpected(Error::Io);
+            /* Propagate, not flatten: the dialler's error carries the OS code
+             * for the failure, and CONNECT_FAILED below is the one place an
+             * operator sees why the agent cannot reach the relay. */
+            if (!ws) return std::unexpected(ws.error());
             ctrl_ = std::move(*ws);
 
             std::uint64_t now = os::monotonic_ms();
@@ -248,11 +251,10 @@ namespace vc
         }
 
         template <class D>
-        std::optional<typename Listener<D>::Ws> Listener<D>::rendezvous_connect(
-            const std::string& address)
+        Result<typename Listener<D>::Ws> Listener<D>::rendezvous_connect(const std::string& address)
         {
             Result<Url> u = url_parse(address);
-            if (!u) return std::nullopt;
+            if (!u) return std::unexpected(u.error());
 
             std::string path = u->path;
             if (!u->query.empty())
@@ -272,7 +274,9 @@ namespace vc
                 }
             }
             Result<Ws> ws = dial_(u->host, u->port, path, "", kConnectTimeout);
-            if (!ws) return std::nullopt;
+            /* Propagate: the dialler's error carries the OS code, and
+             * RENDEZVOUS_FAILED is where it gets reported. */
+            if (!ws) return std::unexpected(ws.error());
             return std::move(*ws);
         }
 
@@ -288,10 +292,11 @@ namespace vc
         template <class D> void Listener<D>::handle_rendezvous_offer(const std::string& address)
         {
             emit("RENDEZVOUS", 0, address);
-            std::optional<Ws> rws = rendezvous_connect(address);
+            Result<Ws> rws = rendezvous_connect(address);
             if (!rws)
             {
-                emit("RENDEZVOUS_FAILED", 0, address);
+                const std::string why = address + ": " + error_detail(rws.error());
+                emit("RENDEZVOUS_FAILED", static_cast<int>(rws.error().code()), why);
                 return;
             }
 
@@ -328,7 +333,7 @@ namespace vc
             if (choose_response_channel(on_control, resp.body.size(), pr.has_address) ==
                 ResponseChannel::Rendezvous)
             {
-                std::optional<Ws> rws = rendezvous_connect(pr.address);
+                Result<Ws> rws = rendezvous_connect(pr.address);
                 if (rws)
                 {
                     Status src = send_response_over(*rws, pr.id, resp);
@@ -381,7 +386,10 @@ namespace vc
             const Status src = deliver_response(ws, pr, resp, on_control);
 
             if (!src)
-                emit("RESPONSE_ERROR", static_cast<int>(src.error()), "failed to send response");
+            {
+                const std::string why = "failed to send response: " + error_detail(src.error());
+                emit("RESPONSE_ERROR", static_cast<int>(src.error().code()), why);
+            }
             else
                 emit("RESPONSE_SENT", resp.status_code, pr.target);
         }
@@ -421,9 +429,10 @@ namespace vc
             while (!stop())
             {
                 emit("CONNECTING", 0, cfg_.namespace_host);
-                if (!ctrl_connect())
+                if (const Status cc = ctrl_connect(); !cc)
                 {
-                    emit("CONNECT_FAILED", static_cast<int>(Error::Io), "will retry");
+                    const std::string why = error_detail(cc.error()) + ", will retry";
+                    emit("CONNECT_FAILED", static_cast<int>(cc.error().code()), why);
                     for (unsigned waited = 0; waited < backoff_ms && !stop(); waited += 100)
                         os::sleep_ms(100);
                     if (backoff_ms < 60000) backoff_ms *= 2;
@@ -458,7 +467,8 @@ namespace vc
                     if (!m)
                     {
                         if (m.error() == Error::Timeout) continue;
-                        emit("DISCONNECTED", static_cast<int>(m.error()), "control channel lost");
+                        const std::string why = "control channel lost: " + error_detail(m.error());
+                        emit("DISCONNECTED", static_cast<int>(m.error().code()), why);
                         break;
                     }
                     if (m->type == Ws::MsgType::Close)

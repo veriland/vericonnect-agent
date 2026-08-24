@@ -205,8 +205,10 @@ namespace fs_cmd
         if (status == 200 && !archived)
         {
             status = 500;
+            /* error_detail, not error_str: this description is the only
+             * account of the failure that leaves the customer's machine. */
             desc = std::format("File {} was read but could not be archived to {}: {}", *path, dest,
-                               vc::error_str(archived.error()));
+                               vc::error_detail(archived.error()));
         }
 
         Json o = Json::object();

@@ -90,15 +90,16 @@ namespace vc
 
         if (!ok)
             return std::unexpected(ImpersonationError{
-                Error::Fail, std::format("Logon failed (Win32 error {})", last)});
+                Error{Error::Fail, last}, std::format("Logon failed (Win32 error {})", last)});
 
         BOOL imp_ok = ImpersonateLoggedOnUser(token);
         DWORD imp_err = imp_ok ? 0 : GetLastError();
         CloseHandle(token); /* once impersonating, the token is no longer needed */
 
         if (!imp_ok)
-            return std::unexpected(ImpersonationError{
-                Error::Fail, std::format("Impersonation failed (Win32 error {})", imp_err)});
+            return std::unexpected(
+                ImpersonationError{Error{Error::Fail, imp_err},
+                                   std::format("Impersonation failed (Win32 error {})", imp_err)});
 
         auto impl = std::make_unique<Impl>();
         impl->active = true;
