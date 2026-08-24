@@ -39,6 +39,21 @@ git rebase --signoff main
 git push --force-with-lease
 ```
 
+**Do not use GitHub's "Update branch" button.** It writes a merge commit
+server-side with no way to attach a sign-off, and `main` is not configured to
+require branches be up to date, so the click buys you nothing. If your branch
+genuinely needs `main`, bring it in yourself:
+
+```bash
+git merge --signoff origin/main
+```
+
+Merge commits are exempt from the sign-off check — a merge carries no code of
+its own — so the exemption is not a licence to skip `-s` on real commits. Where
+you resolve a conflict by hand, that resolution exists only in the merge commit
+and no sign-off covers it; keep such resolutions small and call them out in the
+pull request so a reviewer reads them as code.
+
 ## How to contribute
 
 1. Open an issue first for anything non-trivial, so we can agree on the
