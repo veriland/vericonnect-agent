@@ -123,7 +123,7 @@ that is what keeps them independently buildable and replaceable.
 - **Never let a credential into an error message.** `ImpersonationError`
   carries a message documented as log-safe; keep it that way.
 
-## 4. Interfaces
+## 4. Interfaces and naming
 
 - **Narrow and total.** A function takes what it needs — `std::span`,
   `std::string_view` — not a container it will not own. It should be
@@ -139,6 +139,42 @@ that is what keeps them independently buildable and replaceable.
   adapter ABI does; virtual functions only when the choice is genuinely
   a runtime one. This project's answer is usually compile-time, and that
   is a feature — it is why there is no vtable in the hot path.
+
+### Naming
+
+The tree already follows one convention throughout; it is written down
+here so it survives contact with contributors who have to guess.
+
+| Element | Convention | Example |
+|---|---|---|
+| Types | `PascalCase` | `Socket`, `Error`, `RelayResponse` |
+| Functions, methods, locals | `snake_case` | `connect`, `last_error_code` |
+| Compile-time constants | `k` + `PascalCase` | `kConnectTimeout` |
+| Non-public data members | trailing underscore | `fd_`, `code_` |
+| Namespaces | short, lower-case | `vc`, `vc::os`, `vc::fs` |
+| Files | `vc_<component>`, platform suffix | `vc_sock.h`, `vc_sock_win.cpp` |
+
+**Not `m_`, and not PascalCase methods.** The reason is the standard
+library. This code is `std::expected`, `std::span` and `std::string_view`
+end to end, so `sock.send(...)` reads as a peer of `buf.size()` where
+`Sock.Send(...)` next to `buf.size()` reads as two codebases spliced
+together. The Core Guidelines are our rule set (see *Why not just
+SOLID*), and this is their convention.
+
+Worth stating because it is a standing source of confusion:
+`.clang-format` says `BasedOnStyle: Microsoft`, and that governs
+*layout* only — brace placement, indent width, pointer alignment. It has
+nothing to say about identifiers, and Microsoft's naming comes from the
+Win32 SDK, which has no standard-library idiom to sit beside.
+
+**PascalCase at the boundaries, and that is deliberate.** The C ABI
+entry points (`RunAdapterCommand`, `FreeAdapterString`,
+`GetAdapterInfo`) and the JSON contract keys (`StatusCode`,
+`DestinationFolder`, `FileContent`) are PascalCase because their
+audience is the Windows host and D365FO, not this codebase. They are the
+published contract: changing them breaks callers, so they are not
+inconsistencies to be tidied away. The convention switches exactly where
+the audience does.
 
 ## 5. SOLID, mapped honestly
 
@@ -207,7 +243,7 @@ checks §1 and part of §2–§4 mechanically.
       definitions did *not* have to move into public headers:
       `ScriptedTransport` is a library type, so each template is
       explicitly instantiated for it in the same translation unit and
-      §4's insulation is intact. And the relay needed its *dialler*
+      §1's insulation is intact. And the relay needed its *dialler*
       injected, not just a transport, because it opens rendezvous
       connections mid-stream.
 - [x] **The OS code behind an `Error`** (#25). `Error` was a bare enum,
