@@ -1,8 +1,20 @@
 name: DCO
 
-# Verifies that every commit in a pull request carries a valid
+# Verifies that every non-merge commit in a pull request carries a valid
 # "Signed-off-by" line matching the commit author (Developer Certificate
 # of Origin 1.1). See CONTRIBUTING.md and the DCO file.
+#
+# Merge commits are out of scope, which is what GitHub's own DCO app does.
+# A merge introduces no code of its own: every line it carries arrived in an
+# ordinary commit, signed off on one side or the other. Meanwhile the web
+# UI's "Update branch" button writes `Merge branch 'main' into <branch>`
+# server-side with no body and no way to attach a trailer, so checking merges
+# failed pull requests over a certification nobody could give - while the
+# equally unsigned `Merge pull request #N` commits sailed through, because
+# they do not exist until after these checks have run.
+#
+# The one case this gives up on is a hand-resolved conflict, whose resolution
+# exists only in the merge commit. Review those as code.
 
 on:
   pull_request:
@@ -28,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for sha in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+          for sha in $(git rev-list --no-merges "$BASE_SHA".."$HEAD_SHA"); do
             author="$(git show -s --format='%an <%ae>' "$sha")"
             if ! git show -s --format='%B' "$sha" \
                  | grep -qiE "^Signed-off-by: .+ <.+@.+>"; then
@@ -42,4 +54,4 @@ jobs:
             echo "Fix with:  git rebase --signoff ${BASE_SHA}  &&  git push --force-with-lease"
             exit 1
           fi
-          echo "All commits are signed off."
+          echo "All non-merge commits are signed off."
